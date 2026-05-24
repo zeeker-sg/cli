@@ -39,7 +39,7 @@ zeeker deploy
 
 ## Documentation
 
-For full documentation, visit: https://github.com/houfu/zeeker
+For full documentation, visit: https://github.com/zeeker-sg/cli
 
 ## License
 

@@ -170,7 +170,7 @@ zeeker/
 
 **Old workflow:**
 ```bash
-git clone https://github.com/houfu/zeeker.git
+git clone https://github.com/zeeker-sg/cli.git
 cd zeeker
 uv sync
 uv run pytest
@@ -178,7 +178,7 @@ uv run pytest
 
 **New workflow (exactly the same!):**
 ```bash
-git clone https://github.com/houfu/zeeker.git
+git clone https://github.com/zeeker-sg/cli.git
 cd zeeker
 uv sync
 uv run pytest
@@ -289,7 +289,7 @@ uv sync
 
 - **Documentation**: See [README.md](README.md) for workspace overview
 - **Examples**: Check `examples/` directory for reference implementations
-- **Issues**: Report issues at https://github.com/houfu/zeeker/issues
+- **Issues**: Report issues at https://github.com/zeeker-sg/cli/issues
 
 ## Summary
 

@@ -207,15 +207,16 @@ class FTSProcessor:
                 result.warnings.append(f"No valid FTS fields found for table '{table_name}'")
                 return result
 
-            # Enable FTS5 with triggers for automatic updates
-            table.enable_fts(valid_fts_fields, create_triggers=True)
+            # Enable FTS5 once with triggers; sqlite-utils' replace=True makes
+            # this idempotent. If the FTS table already exists with the same
+            # columns + triggers, enable_fts returns early without doing any
+            # work. Otherwise it drops and recreates (and populates internally).
+            # The triggers (<table>_ai/_ad/_au) keep the index in sync as rows
+            # change, so we don't need to populate on every subsequent build.
+            table.enable_fts(valid_fts_fields, create_triggers=True, replace=True)
             result.info.append(
                 f"Enabled FTS on table '{table_name}' for fields: {', '.join(valid_fts_fields)}"
             )
-
-            # Populate the FTS index
-            table.populate_fts(valid_fts_fields)
-            result.info.append(f"Populated FTS index for table '{table_name}'")
 
         except Exception as e:
             result.is_valid = False

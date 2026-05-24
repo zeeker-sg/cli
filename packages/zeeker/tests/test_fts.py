@@ -47,7 +47,6 @@ def test_fts_processor_setup(temp_project_dir):
 
     assert result.is_valid
     assert "Enabled FTS on table 'documents' for fields: title, content" in result.info
-    assert "Populated FTS index for table 'documents'" in result.info
 
     # Verify FTS table was created
     assert "documents_fts" in db.table_names()
@@ -373,3 +372,52 @@ def test_get_fts_config_for_resource():
     assert missing_config["fragments_fts_fields"] == []
     assert missing_config["has_fragments"] is False
     assert missing_config["auto_detect_fragments_fts"] is False
+
+
+def test_fts_processor_idempotent(temp_project_dir):
+    """FTS only needs to be enabled once. Subsequent runs must be no-ops; the
+    triggers created on the first run keep the index in sync as rows change.
+    """
+    project = ZeekerProject(
+        name="test_fts_idempotent",
+        database="test_fts_idempotent.db",
+        resources={
+            "docs": {"description": "Test documents", "fts_fields": ["title", "content"]}
+        },
+        root_path=temp_project_dir,
+    )
+
+    db_path = temp_project_dir / "test_fts_idempotent.db"
+    db = sqlite_utils.Database(str(db_path))
+    db["docs"].insert_all(
+        [
+            {"id": 1, "title": "Hello world", "content": "first body"},
+            {"id": 2, "title": "Goodbye world", "content": "second body"},
+        ]
+    )
+
+    fts_processor = FTSProcessor(project)
+
+    # First run: creates docs_fts, populates from existing rows, installs triggers.
+    first = fts_processor.setup_fts_for_database(db)
+    assert first.is_valid, first.errors
+    assert "docs_fts" in db.table_names()
+    initial_count = db.execute("SELECT count(*) FROM docs_fts").fetchone()[0]
+    assert initial_count == 2
+
+    # Insert a new row through the source table — the AFTER INSERT trigger
+    # should add it to the FTS index without us doing anything.
+    db["docs"].insert({"id": 3, "title": "Trigger test", "content": "third body"})
+    rows = list(db.execute("SELECT rowid FROM docs_fts WHERE docs_fts MATCH 'trigger'"))
+    assert len(rows) == 1, "AFTER INSERT trigger should have indexed the new row"
+
+    # Second run: docs_fts already exists with matching schema + triggers.
+    # sqlite-utils' enable_fts(replace=True) must early-return without
+    # rebuilding (which would otherwise duplicate or churn the index).
+    second = fts_processor.setup_fts_for_database(db)
+    assert second.is_valid, second.errors
+    assert db.execute("SELECT count(*) FROM docs_fts").fetchone()[0] == 3
+    rows = list(db.execute("SELECT rowid FROM docs_fts WHERE docs_fts MATCH 'hello'"))
+    assert len(rows) == 1
+    rows = list(db.execute("SELECT rowid FROM docs_fts WHERE docs_fts MATCH 'trigger'"))
+    assert len(rows) == 1

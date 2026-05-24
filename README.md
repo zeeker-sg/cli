@@ -1,7 +1,7 @@
 # Zeeker Workspace
 
 [![PyPI version](https://badge.fury.io/py/zeeker.svg)](https://badge.fury.io/py/zeeker)
-[![Test Status](https://github.com/houfu/zeeker/workflows/Test/badge.svg)](https://github.com/houfu/zeeker/actions)
+[![Test Status](https://github.com/zeeker-sg/cli/workflows/Test/badge.svg)](https://github.com/zeeker-sg/cli/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
@@ -62,7 +62,7 @@ For full documentation, see:
 1. Install uv: https://docs.astral.sh/uv/
 2. Clone repository:
    ```bash
-   git clone https://github.com/houfu/zeeker.git
+   git clone https://github.com/zeeker-sg/cli.git
    cd zeeker
    ```
 3. Install all workspace dependencies:
@@ -159,5 +159,5 @@ MIT License - see LICENSE file for details
 
 - [PyPI: zeeker](https://pypi.org/project/zeeker/)
 - [PyPI: zeeker-common](https://pypi.org/project/zeeker-common/)
-- [GitHub Repository](https://github.com/houfu/zeeker)
-- [Issue Tracker](https://github.com/houfu/zeeker/issues)
+- [GitHub Repository](https://github.com/zeeker-sg/cli)
+- [Issue Tracker](https://github.com/zeeker-sg/cli/issues)

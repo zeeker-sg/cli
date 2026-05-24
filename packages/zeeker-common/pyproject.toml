@@ -18,8 +18,8 @@ openai = ["openai>=1.0.0"]
 all = ["openai>=1.0.0"]
 
 [project.urls]
-Homepage = "https://github.com/houfu/zeeker"
-Repository = "https://github.com/houfu/zeeker"
+Homepage = "https://github.com/zeeker-sg/cli"
+Repository = "https://github.com/zeeker-sg/cli"
 
 [build-system]
 requires = ["hatchling"]
