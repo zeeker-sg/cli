@@ -35,6 +35,4 @@ jobs:
       run: uv build --package zeeker
 
     - name: Publish to PyPI
-      env:
-        UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
       run: uv publish dist/*
