@@ -366,8 +366,8 @@ uv publish --token $PYPI_TOKEN_COMMON
 
 ## Questions?
 
-- **Issues**: https://github.com/houfu/zeeker/issues
-- **Discussions**: https://github.com/houfu/zeeker/discussions
+- **Issues**: https://github.com/zeeker-sg/cli/issues
+- **Discussions**: https://github.com/zeeker-sg/cli/discussions
 - **Email**: houfu@outlook.sg
 
 ## Code of Conduct

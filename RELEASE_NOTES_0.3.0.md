@@ -126,10 +126,10 @@ zeeker build --sync-from-s3 users                 # Selective sync + build
 
 ## 🔗 Links
 
-- **GitHub Repository**: https://github.com/houfu/zeeker
+- **GitHub Repository**: https://github.com/zeeker-sg/cli
 - **Documentation**: See README.md for complete usage guide
-- **Issues & Feedback**: https://github.com/houfu/zeeker/issues
+- **Issues & Feedback**: https://github.com/zeeker-sg/cli/issues
 
 ---
 
-**Full Changelog**: [v0.2.1...v0.3.0](https://github.com/houfu/zeeker/compare/v0.2.1...v0.3.0)
+**Full Changelog**: [v0.2.1...v0.3.0](https://github.com/zeeker-sg/cli/compare/v0.2.1...v0.3.0)

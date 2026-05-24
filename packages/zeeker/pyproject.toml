@@ -32,10 +32,10 @@ data = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/houfu/zeeker"
-Documentation = "https://github.com/houfu/zeeker/blob/master/README.md"
-Repository = "https://github.com/houfu/zeeker"
-Issues = "https://github.com/houfu/zeeker/issues"
+Homepage = "https://github.com/zeeker-sg/cli"
+Documentation = "https://github.com/zeeker-sg/cli/blob/master/README.md"
+Repository = "https://github.com/zeeker-sg/cli"
+Issues = "https://github.com/zeeker-sg/cli/issues"
 
 [project.scripts]
 zeeker = "zeeker.cli:cli"
