@@ -331,6 +331,10 @@ database = "{self.database}"
                 "label_column",
                 "columns",
                 "units",
+                "license",
+                "license_url",
+                "source",
+                "source_url",
             ]
 
             for field_name in datasette_fields:
