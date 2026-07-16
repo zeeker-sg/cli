@@ -24,6 +24,7 @@ from .commands.helpers import (
     require_project,
 )
 from .commands.metadata import metadata
+from .commands.runbook import runbook
 from .core.project import ZeekerProjectManager
 from .core.types import BuildReport, ValidationResult, ZeekerSchemaConflictError
 
@@ -463,6 +464,7 @@ def deploy_database(dry_run, verbose, as_json):
 cli.add_command(assets)
 cli.add_command(backup)
 cli.add_command(metadata)
+cli.add_command(runbook)
 
 
 if __name__ == "__main__":
