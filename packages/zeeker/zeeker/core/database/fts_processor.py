@@ -207,14 +207,26 @@ class FTSProcessor:
                 result.warnings.append(f"No valid FTS fields found for table '{table_name}'")
                 return result
 
-            # Enable FTS5 with triggers for automatic updates
-            table.enable_fts(valid_fts_fields, create_triggers=True)
+            # Enable FTS5 with triggers for automatic updates.
+            # replace=True makes this idempotent: if an FTS table with the
+            # same configuration already exists (incremental / --sync-from-s3
+            # builds), sqlite-utils returns without touching it; if the
+            # configuration changed, it drops and recreates the index.
+            table.enable_fts(valid_fts_fields, create_triggers=True, replace=True)
             result.info.append(
                 f"Enabled FTS on table '{table_name}' for fields: {', '.join(valid_fts_fields)}"
             )
 
-            # Populate the FTS index
-            table.populate_fts(valid_fts_fields)
+            # Rebuild the FTS index so it reflects the current table contents.
+            # enable_fts populates only when it (re)creates the index — on the
+            # replace=True early-return path nothing is repopulated, and
+            # populate_fts() is a raw INSERT that would double-index existing
+            # rows. rebuild_fts() (FTS5 'rebuild') is idempotent either way.
+            table.rebuild_fts()
+            # rebuild_fts uses db.execute (no implicit commit, unlike the
+            # executescript-based populate_fts) — commit so the connection
+            # doesn't hold a write lock after the build finishes.
+            db.conn.commit()
             result.info.append(f"Populated FTS index for table '{table_name}'")
 
         except Exception as e:

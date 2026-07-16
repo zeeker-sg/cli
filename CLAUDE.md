@@ -33,6 +33,8 @@ zeeker/{cli.py,commands/{assets.py,metadata.py,helpers.py}}
 `async fetch_data(existing_table)` (concurrent I/O)
 `fetch_fragments_data(existing_fragments_table, main_data_context=None)` (main_data_context avoids duplicate API calls)
 `transform_data()` (optional)
+Sibling imports work: resource modules can `import helper` for helpers in `resources/` — import at module top level only (dir is appended to sys.path just for the load, lowest precedence, then removed; stdlib/site-packages always win name clashes)
+`--setup-fts` is idempotent (safe on incremental `--sync-from-s3` builds)
 
 ## CRITICAL: Duplicate Handling
 MUST filter existing IDs to avoid UNIQUE constraint errors:
@@ -58,6 +60,8 @@ CRITICAL: Use `float` for potential decimals, consistent types, no type mixing
 
 ## Fragments
 `--fragments`: Two tables (main: metadata, fragments: chunks). Context passing via `main_data_context` avoids duplicate API calls.
+**Single-fetch lifecycle**: `fetch_data()` runs ONCE per build — the resource module is loaded once (also under `--parallel`) and its raw fetch output (pre-`transform_data`, snapshotted) is threaded to the fragments phase as `main_data_context` (no module reload, no second fetch). Resources may rely on this (no PID sentinels/marker files needed).
+**`fragments_on_skip = true`** (per-resource in zeeker.toml, opt-in): run the fragments phase even when `fetch_data()` returns no new rows (steady-state builds), with `main_data_context=[]`. Default (flag absent): fragments only run when new main rows were inserted (unchanged behavior).
 ```python
 def fetch_fragments_data(existing_fragments_table, main_data_context=None):
     if main_data_context:

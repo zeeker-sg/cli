@@ -108,6 +108,16 @@ class ValidationResult:
     tracebacks: list[str] = field(default_factory=list)
     report: "BuildReport | None" = None
     records: int | None = None
+    # Generic payload (e.g. a loaded resource module from _load_resource_module).
+    data: Any = None
+    # Loaded resource module from the main build phase. Threaded through to
+    # the fragments phase so each resource module is imported exactly once
+    # per build.
+    module: Any = None
+    # Raw fetch_data() output (pre-transform) from the main build phase.
+    # Threaded through to the fragments phase as main_data_context so
+    # fetch_data() runs exactly once per build.
+    raw_data: list[dict[str, Any]] | None = None
 
 
 @dataclass

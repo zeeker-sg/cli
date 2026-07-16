@@ -136,28 +136,48 @@ class DatabaseBuilder:
                 else:
                     result.info.extend(resource_result.info)
 
-                    # Process fragments if enabled (main must have succeeded)
-                    if outcome.status == "success":
-                        resource_config = self.project.resources.get(resource_name, {})
-                        if resource_config.get("fragments", False):
-                            fragments_result = self._process_fragments_for_resource(
-                                db, resource_name
+                    # Process fragments if enabled. By default fragments run
+                    # only when the main phase inserted rows ("success").
+                    # Resources that opt in via `fragments_on_skip = true` in
+                    # zeeker.toml also run the fragments phase when fetch_data
+                    # returned no new rows ("skipped") — enrichment-style
+                    # resources need this on steady-state builds.
+                    resource_config = self.project.resources.get(resource_name, {})
+                    fragments_enabled = resource_config.get("fragments", False)
+                    run_fragments = fragments_enabled and (
+                        outcome.status == "success"
+                        or (
+                            outcome.status == "skipped"
+                            and resource_config.get("fragments_on_skip", False)
+                        )
+                    )
+                    if run_fragments:
+                        # Reuse the module and raw fetch_data() output from
+                        # the main phase — fetch_data must run once per build.
+                        main_data_context = resource_result.raw_data
+                        if outcome.status == "skipped" and main_data_context is None:
+                            main_data_context = []
+                        fragments_result = self._process_fragments_for_resource(
+                            db,
+                            resource_name,
+                            module=resource_result.module,
+                            main_data_context=main_data_context,
+                        )
+                        if not fragments_result.is_valid:
+                            result.errors.extend(fragments_result.errors)
+                            result.tracebacks.extend(fragments_result.tracebacks)
+                            result.is_valid = False
+                            outcome.status = "failed"
+                            outcome.error_message = (
+                                fragments_result.errors[0]
+                                if fragments_result.errors
+                                else "fragments processing failed"
                             )
-                            if not fragments_result.is_valid:
-                                result.errors.extend(fragments_result.errors)
-                                result.tracebacks.extend(fragments_result.tracebacks)
-                                result.is_valid = False
-                                outcome.status = "failed"
-                                outcome.error_message = (
-                                    fragments_result.errors[0]
-                                    if fragments_result.errors
-                                    else "fragments processing failed"
-                                )
-                                if fragments_result.tracebacks:
-                                    outcome.traceback = fragments_result.tracebacks[0]
-                            else:
-                                result.info.extend(fragments_result.info)
-                                outcome.fragments_records = fragments_result.records
+                            if fragments_result.tracebacks:
+                                outcome.traceback = fragments_result.tracebacks[0]
+                        else:
+                            result.info.extend(fragments_result.info)
+                            outcome.fragments_records = fragments_result.records
 
                 report.resources.append(outcome)
                 if progress_callback:
@@ -187,8 +207,10 @@ class DatabaseBuilder:
             report.fatal_error = msg
 
         finally:
-            # Prevent stale pre-warmed data from leaking into a reused builder.
-            self.processor.async_executor.clear_prewarmed()
+            # Prevent per-build state (pre-warmed fetches, fetch cache,
+            # loaded resource modules, sibling helper modules in
+            # sys.modules) from leaking into a later build in this process.
+            self.processor.clear_build_caches()
 
         report.total_duration_s = time.perf_counter() - build_started
         return result
@@ -240,6 +262,9 @@ class DatabaseBuilder:
             return module_result
 
         module = module_result.data
+        # Thread the loaded module through to the caller so the fragments
+        # phase can reuse it instead of re-importing the resource file.
+        result.module = module
 
         try:
             # Get the fetch_data function
@@ -286,6 +311,9 @@ class DatabaseBuilder:
             else:
                 result.info.extend(resource_result.info)
                 result.records = resource_result.records
+                # Thread the raw fetch_data() output through for the
+                # fragments phase (main_data_context).
+                result.raw_data = resource_result.raw_data
 
                 # Update resource timestamps
                 duration_ms = int((time.time() - start_time) * 1000)
@@ -305,25 +333,39 @@ class DatabaseBuilder:
         return result
 
     def _process_fragments_for_resource(
-        self, db: sqlite_utils.Database, resource_name: str
+        self,
+        db: sqlite_utils.Database,
+        resource_name: str,
+        module=None,
+        main_data_context: list | None = None,
     ) -> ValidationResult:
         """Process fragments data for a fragments-enabled resource.
 
         Args:
             db: sqlite-utils Database instance
             resource_name: Name of the resource
+            module: Already-loaded resource module from the main phase. When
+                provided, the module is NOT re-imported (resources may rely on
+                module-level state surviving from fetch_data). When None
+                (legacy callers), the module is loaded from disk.
+            main_data_context: Raw fetch_data() output from the main phase,
+                passed to fetch_fragments_data as context. An empty list is a
+                valid context (steady-state build with fragments_on_skip).
+                When None (legacy callers), fetch_data is re-invoked to build
+                the context — the old, duplicate-fetch behavior.
 
         Returns:
             ValidationResult with fragments processing results
         """
         result = ValidationResult(is_valid=True)
 
-        # Load resource module
-        module_result = self.processor._load_resource_module(resource_name)
-        if not module_result.is_valid:
-            return module_result
-
-        module = module_result.data
+        # Reuse the module from the main phase when provided; only load from
+        # disk for legacy callers that don't thread it through.
+        if module is None:
+            module_result = self.processor._load_resource_module(resource_name)
+            if not module_result.is_valid:
+                return module_result
+            module = module_result.data
 
         # Check if fragments function exists
         if not hasattr(module, "fetch_fragments_data"):
@@ -334,22 +376,23 @@ class DatabaseBuilder:
             )
             return result
 
-        # Get raw data from fetch_data for fragments context
-        main_data_context = None
-        try:
-            fetch_data = getattr(module, "fetch_data")
-            existing_table = db[resource_name] if db[resource_name].exists() else None
-            main_data_context = self.processor.async_executor.call_fetch_data(
-                fetch_data, existing_table, resource_name=resource_name
-            )
-        except Exception as e:
-            # If we can't get context, fragments will work without it — but
-            # surface the reason rather than swallowing the exception silently.
-            result.warnings.append(
-                f"Fragments context fetch failed for '{resource_name}' "
-                f"(fragments will run without main-data context): {e}"
-            )
-            main_data_context = None
+        # Build main_data_context only when the caller didn't thread it
+        # through from the main phase (legacy behavior: re-run fetch_data).
+        if main_data_context is None:
+            try:
+                fetch_data = getattr(module, "fetch_data")
+                existing_table = db[resource_name] if db[resource_name].exists() else None
+                main_data_context = self.processor.async_executor.call_fetch_data(
+                    fetch_data, existing_table, resource_name=resource_name
+                )
+            except Exception as e:
+                # If we can't get context, fragments will work without it — but
+                # surface the reason rather than swallowing the exception silently.
+                result.warnings.append(
+                    f"Fragments context fetch failed for '{resource_name}' "
+                    f"(fragments will run without main-data context): {e}"
+                )
+                main_data_context = None
 
         # Process fragments
         fragments_result = self.processor.process_fragments_data(
