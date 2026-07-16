@@ -8,6 +8,7 @@ applying transformations, and inserting data into SQLite databases.
 import importlib.util
 import inspect
 import sqlite3
+import sys
 import traceback
 from pathlib import Path
 from typing import Any, Dict, List
@@ -76,6 +77,11 @@ class ResourceProcessor:
                 result.is_valid = False
                 result.errors.append(f"fetch_data() in '{resource_name}' must return a list")
                 return result
+
+            # Expose the raw fetch output so the builder can thread it into
+            # the fragments phase as main_data_context without re-running
+            # fetch_data().
+            result.raw_data = raw_data
 
             if not raw_data:
                 result.info.append(f"No data returned for resource '{resource_name}' - skipping")
@@ -239,6 +245,15 @@ class ResourceProcessor:
             return result
 
         try:
+            # Make sibling modules in resources/ importable (e.g.
+            # ``import extraction`` from resources/judgments.py). Resource
+            # modules are loaded by file path with no package context, so
+            # without this, sibling imports require a manual sys.path shim
+            # in every resource file.
+            resources_dir = str(self.resources_path)
+            if resources_dir not in sys.path:
+                sys.path.insert(0, resources_dir)
+
             # Dynamically import the resource module
             spec = importlib.util.spec_from_file_location(resource_name, resource_file)
             module = importlib.util.module_from_spec(spec)
