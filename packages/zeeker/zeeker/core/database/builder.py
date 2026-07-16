@@ -190,6 +190,25 @@ class DatabaseBuilder:
                             result.warnings.extend(fragments_result.warnings)
                             outcome.warnings.extend(fragments_result.warnings)
 
+                        # Resource code that runs during the fragments phase
+                        # (fetch_fragments_data / transform_fragments_data)
+                        # may set fresh __zeeker_report__ counters after the
+                        # processor's first read — consume again and merge
+                        # into the outcome so that work isn't dropped.
+                        if resource_result.module is not None:
+                            post_report = ValidationResult(is_valid=True)
+                            self.processor._consume_zeeker_report(
+                                resource_result.module, post_report
+                            )
+                            for key, value in post_report.extra_counts.items():
+                                outcome.extra_counts[key] = outcome.extra_counts.get(key, 0) + value
+                            if post_report.notes:
+                                outcome.notes = (
+                                    f"{outcome.notes}; {post_report.notes}"
+                                    if outcome.notes
+                                    else post_report.notes
+                                )
+
                 report.resources.append(outcome)
                 if progress_callback:
                     progress_callback(resource_name, outcome)
@@ -353,11 +372,20 @@ class DatabaseBuilder:
                 # fragments phase (main_data_context).
                 result.raw_data = resource_result.raw_data
 
-                # Update resource timestamps
-                duration_ms = int((time.time() - start_time) * 1000)
-                self.schema_manager.update_resource_timestamps(
-                    db, resource_name, build_id, duration_ms
+                # Update resource timestamps — but only when the source was
+                # actually checked (success or an up_to_date skip). A skip
+                # with kind "blocked" or "disabled" means "I could not even
+                # look"; advancing _zeeker_updates.last_updated would make
+                # time-based incremental resources permanently miss anything
+                # published while the source was unreachable/disabled.
+                source_was_checked = not (
+                    resource_result.skipped and resource_result.skip_kind in ("blocked", "disabled")
                 )
+                if source_was_checked:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    self.schema_manager.update_resource_timestamps(
+                        db, resource_name, build_id, duration_ms
+                    )
 
         except ZeekerSchemaConflictError as e:
             result.is_valid = False

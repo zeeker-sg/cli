@@ -331,8 +331,9 @@ def build(
         result.report = BuildReport(fatal_error=fatal_msg)
 
     # In plain (non-TTY) text mode, warnings already stream as WARN[...] lines
-    # via render_resource_event/_emit_plain — avoid printing them twice.
-    if result.warnings and not as_json and console.is_terminal:
+    # via render_resource_event/_emit_plain; in verbose rich mode _emit_rich
+    # lists them under the summary table — avoid printing them twice.
+    if result.warnings and not as_json and console.is_terminal and not verbose:
         echo_warnings(result)
 
     report = result.report

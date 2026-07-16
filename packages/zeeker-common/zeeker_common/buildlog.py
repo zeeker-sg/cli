@@ -18,9 +18,16 @@ Usage::
     log = resource_logger("judgments")
     log.info("discovery starting")
     log.warn("proxy slow, retrying")
-    log.done(new=3, updated=50)          # judgments: done — new=3, updated=50
+    log.done(new=3, updated=50)          # judgments: done — 3 new, 50 updated
     log.aborted("circuit breaker", failed=5)
     log.skipped("TAILSCALE_PROXY unset")
+
+Count grammar is noun-first (``3 new, 2 skipped, 0 failed``) to match the
+``done — N new, M skipped, K failed`` lines the data repos' Build Monitoring
+Guides already standardized on — swapping an existing ``_echo`` helper for
+``resource_logger`` must not break monitoring regexes like ``(\\d+) new``.
+Underscores in count names render as spaces (``still_pending=4`` →
+``4 still pending``); the JSONL sink keeps raw keys.
 """
 
 import datetime
@@ -34,7 +41,13 @@ _JSONL_ENV_VAR = "ZEEKER_BUILDLOG_JSONL"
 
 
 def _format_counts(counts: dict) -> str:
-    return ", ".join(f"{k}={v}" for k, v in counts.items())
+    """Noun-first count grammar: ``3 new, 2 skipped, 0 failed``.
+
+    This matches the shape the downstream data repos' monitoring guides
+    already parse (``done — (\\d+) new``). Underscores become spaces so
+    ``still_pending=4`` renders as ``4 still pending``.
+    """
+    return ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in counts.items())
 
 
 class ResourceLogger:
@@ -58,14 +71,14 @@ class ResourceLogger:
         self._emit(msg, stream=sys.stderr, level="error", event="error")
 
     def done(self, **counts) -> None:
-        """Completion marker (stdout): ``{name}: done — k1=v1, k2=v2``."""
+        """Completion marker (stdout): ``{name}: done — 3 new, 2 skipped``."""
         msg = "done"
         if counts:
             msg += f" — {_format_counts(counts)}"
         self._emit(msg, stream=sys.stdout, level="info", event="done", counts=counts)
 
     def aborted(self, reason: str, **counts) -> None:
-        """Abort marker (stderr): ``{name}: ABORTED (reason) — k1=v1``."""
+        """Abort marker (stderr): ``{name}: ABORTED (reason) — 5 failed``."""
         msg = f"ABORTED ({reason})"
         if counts:
             msg += f" — {_format_counts(counts)}"

@@ -42,12 +42,21 @@ def test_multiline_message_prefixes_every_line_preserving_whitespace(capsys):
     assert captured.out == "res: first\nres:   indented\nres: last\n"
 
 
-def test_done_with_counts(capsys):
+def test_done_with_counts_uses_noun_first_grammar(capsys):
+    """Count grammar must match the data repos' adopted monitoring shape:
+    'done — 3 new, 2 skipped, 0 failed' (parsed by regexes like '(\\d+) new')."""
     log = resource_logger("judgments")
     log.done(new=3, updated=50)
     captured = capsys.readouterr()
-    assert captured.out == "judgments: done — new=3, updated=50\n"
+    assert captured.out == "judgments: done — 3 new, 50 updated\n"
     assert captured.err == ""
+
+
+def test_done_counts_render_underscores_as_spaces(capsys):
+    log = resource_logger("pdpc")
+    log.done(ok=4, still_pending=2)
+    captured = capsys.readouterr()
+    assert captured.out == "pdpc: done — 4 ok, 2 still pending\n"
 
 
 def test_done_without_counts(capsys):
@@ -62,7 +71,7 @@ def test_aborted_with_counts_goes_to_stderr(capsys):
     log.aborted("circuit breaker", failed=5, ok=2)
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert captured.err == "pdpc: ABORTED (circuit breaker) — failed=5, ok=2\n"
+    assert captured.err == "pdpc: ABORTED (circuit breaker) — 5 failed, 2 ok\n"
 
 
 def test_aborted_without_counts(capsys):
@@ -125,7 +134,7 @@ def test_jsonl_failure_never_raises(tmp_path, monkeypatch, capsys):
     log.done(x=1)
     captured = capsys.readouterr()
     assert "res: still works\n" in captured.out
-    assert "res: done — x=1\n" in captured.out
+    assert "res: done — 1 x\n" in captured.out
 
 
 def test_jsonl_handles_non_serializable_counts(tmp_path, monkeypatch, capsys):

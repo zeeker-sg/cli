@@ -17,6 +17,7 @@ Covers:
 
 import io
 import json
+import re
 import sqlite3
 import textwrap
 from pathlib import Path
@@ -587,3 +588,302 @@ class TestRendering:
         )
         _emit_plain(report, verbose=False, console=_plain_console(buf))
         assert "WARN[build]: S3 sync failed but continuing with local build" in buf.getvalue()
+
+
+def _tty_console(buffer: io.StringIO) -> Console:
+    return Console(file=buffer, force_terminal=True, width=200)
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
+
+
+class TestRichMarkupSafety:
+    """User-controlled strings (skip reasons, error messages, __zeeker_report__
+    keys) must be markup-escaped in TTY mode — a bracketed token must neither
+    raise MarkupError (which would abort the whole build from inside the
+    progress callback) nor be silently swallowed as a style tag."""
+
+    def test_skip_reason_with_closing_tag_does_not_raise(self):
+        buf = io.StringIO()
+        outcome = ResourceOutcome(
+            name="pdpc",
+            status="skipped",
+            duration_s=1.0,
+            skip_reason="proxy down [/socks5]",
+            skip_kind="blocked",
+        )
+        render_resource_event("pdpc", outcome, console=_tty_console(buf))
+        assert "proxy down [/socks5] (blocked)" in _strip_ansi(buf.getvalue())
+
+    def test_skip_reason_with_bracketed_url_is_not_swallowed(self):
+        buf = io.StringIO()
+        outcome = ResourceOutcome(
+            name="pdpc",
+            status="skipped",
+            duration_s=1.0,
+            skip_reason="proxy [socks5h://172.17.0.1:1055] unreachable",
+            skip_kind="blocked",
+        )
+        render_resource_event("pdpc", outcome, console=_tty_console(buf))
+        assert "[socks5h://172.17.0.1:1055]" in _strip_ansi(buf.getvalue())
+
+    def test_error_message_with_brackets_does_not_raise(self):
+        buf = io.StringIO()
+        outcome = ResourceOutcome(
+            name="docs",
+            status="failed",
+            duration_s=0.4,
+            error_message="RetryError[<Future raised [/ProxyError]>]",
+        )
+        render_resource_event("docs", outcome, console=_tty_console(buf))
+        assert "RetryError[<Future raised [/ProxyError]>]" in _strip_ansi(buf.getvalue())
+
+    def test_extra_count_keys_with_brackets_do_not_raise(self):
+        buf = io.StringIO()
+        outcome = ResourceOutcome(
+            name="docs",
+            status="success",
+            records=1,
+            duration_s=0.1,
+            extra_counts={"[/x]": 1},
+        )
+        render_resource_event("docs", outcome, console=_tty_console(buf))
+        assert "[/x]=1" in _strip_ansi(buf.getvalue())
+
+    def test_emit_rich_table_and_verbose_warnings_escape_content(self):
+        from zeeker.commands.helpers import _emit_rich
+
+        buf = io.StringIO()
+        report = BuildReport(
+            resources=[
+                ResourceOutcome(
+                    name="pdpc",
+                    status="skipped",
+                    skip_reason="proxy down [/socks5]",
+                    skip_kind="blocked",
+                    extra_counts={"[/y]": 2},
+                    warnings=["warn with [/tag] inside"],
+                )
+            ],
+            total_duration_s=1.0,
+            build_warnings=["build warn [/oops]"],
+        )
+        _emit_rich(report, verbose=True, console=_tty_console(buf))
+        out = _strip_ansi(buf.getvalue())
+        assert "proxy down" in out
+        assert "[/tag]" in out
+        assert "[/oops]" in out
+
+    def test_emit_rich_fatal_error_with_brackets_does_not_raise(self):
+        from zeeker.commands.helpers import _emit_rich
+
+        buf = io.StringIO()
+        report = BuildReport(fatal_error="Database build failed: [/boom]")
+        _emit_rich(report, verbose=False, console=_tty_console(buf))
+        assert "[/boom]" in _strip_ansi(buf.getvalue())
+
+    def test_build_with_bracketed_skip_reason_is_not_fatal(self, tmp_path):
+        """End-to-end: a Skip reason containing a closing-tag-like token must
+        not convert the build into a fatal error via the TTY progress
+        callback (builder catches callback exceptions as fatal)."""
+        manager = _make_project(tmp_path, "[resource.spiky]\ndescription = 'x'\n")
+        (tmp_path / "resources" / "spiky.py").write_text(
+            """
+from zeeker import Skip
+
+def fetch_data(existing_table):
+    raise Skip("proxy down [/socks5]", kind="blocked")
+"""
+        )
+        buf = io.StringIO()
+        console = _tty_console(buf)
+
+        def callback(name, outcome):
+            render_resource_event(name, outcome, console=console)
+
+        result = manager.build_database(progress_callback=callback)
+        assert result.is_valid, result.errors
+        assert result.report.fatal_error is None
+        assert result.report.resources[0].status == "skipped"
+
+
+class TestSkipDoesNotAdvanceFreshnessMarker:
+    """A blocked/disabled skip means 'I could not even check the source' —
+    it must NOT bump _zeeker_updates.last_updated, or time-based incremental
+    resources would permanently miss anything published during the outage."""
+
+    @staticmethod
+    def _last_updated(db_path: Path, resource: str) -> str | None:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT last_updated FROM _zeeker_updates WHERE resource_name = ?",
+                (resource,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return row[0] if row else None
+
+    def _project_with_flagged_resource(self, tmp_path: Path, kind: str):
+        flag = tmp_path / "skip.flag"
+        manager = _make_project(tmp_path, "[resource.docs]\ndescription = 'x'\n")
+        (tmp_path / "resources" / "docs.py").write_text(
+            f"""
+from pathlib import Path
+from zeeker import Skip
+
+FLAG = {str(flag)!r}
+
+def fetch_data(existing_table):
+    if Path(FLAG).exists():
+        raise Skip("source unreachable", kind={kind!r})
+    return [{{"id": 1}}]
+"""
+        )
+        return manager, flag
+
+    @pytest.mark.parametrize("kind", ["blocked", "disabled"])
+    def test_blocked_and_disabled_skips_leave_timestamp_untouched(self, tmp_path, kind):
+        manager, flag = self._project_with_flagged_resource(tmp_path, kind)
+        db_path = tmp_path / "test_project.db"
+
+        first = manager.build_database()
+        assert first.is_valid, first.errors
+        stamp_after_success = self._last_updated(db_path, "docs")
+        assert stamp_after_success is not None
+
+        flag.write_text("on")
+        second = manager.build_database()
+        assert second.is_valid, second.errors
+        assert second.report.resources[0].status == "skipped"
+        assert second.report.resources[0].skip_kind == kind
+        assert self._last_updated(db_path, "docs") == stamp_after_success
+
+    def test_up_to_date_skip_still_advances_timestamp(self, tmp_path):
+        """An up_to_date skip means the source WAS checked — the freshness
+        marker must advance, same as the legacy returned-[] behavior."""
+        manager = _make_project(tmp_path, "[resource.quiet]\ndescription = 'x'\n")
+        (tmp_path / "resources" / "quiet.py").write_text(
+            "def fetch_data(existing_table):\n    return []\n"
+        )
+        db_path = tmp_path / "test_project.db"
+
+        first = manager.build_database()
+        assert first.is_valid, first.errors
+        stamp = self._last_updated(db_path, "quiet")
+        assert stamp is not None
+
+        second = manager.build_database()
+        assert second.is_valid, second.errors
+        assert self._last_updated(db_path, "quiet") >= stamp
+
+
+class TestSkipInFragmentsPhase:
+    def test_skip_from_fetch_fragments_data_is_graceful(self, tmp_path):
+        """Skip raised from fetch_fragments_data skips the fragments phase
+        without failing the resource or the build."""
+        manager = _make_project(
+            tmp_path,
+            """\
+            [resource.enrich]
+            description = "x"
+            fragments = true
+            """,
+        )
+        (tmp_path / "resources" / "enrich.py").write_text(
+            """
+from zeeker import Skip
+
+def fetch_data(existing_table):
+    return [{"id": 1, "title": "doc"}]
+
+def fetch_fragments_data(existing_fragments_table, main_data_context=None):
+    raise Skip("enrichment proxy down", kind="blocked")
+"""
+        )
+
+        result = manager.build_database()
+        assert result.is_valid, result.errors
+        outcome = result.report.resources[0]
+        assert outcome.status == "success"
+        assert outcome.records == 1
+        assert not outcome.fragments_records
+
+
+class TestZeekerReportLateCounters:
+    def test_counters_set_in_fetch_fragments_data_are_merged(self, tmp_path):
+        """Counters set by resource code that runs AFTER fetch_data (the
+        fragments phase) must still reach the outcome."""
+        manager = _make_project(
+            tmp_path,
+            """\
+            [resource.backfill]
+            description = "x"
+            fragments = true
+            fragments_on_skip = true
+            """,
+        )
+        (tmp_path / "resources" / "backfill.py").write_text(
+            """
+def fetch_data(existing_table):
+    global __zeeker_report__
+    __zeeker_report__ = {"discovered": 2}
+    return []
+
+def fetch_fragments_data(existing_fragments_table, main_data_context=None):
+    global __zeeker_report__
+    __zeeker_report__ = {"fragments_backfilled": 4, "notes": "backfill ran"}
+    return [{"id": 1, "parent_id": 1, "text": "chunk"}]
+"""
+        )
+
+        result = manager.build_database()
+        assert result.is_valid, result.errors
+        outcome = result.report.resources[0]
+        assert outcome.extra_counts == {"discovered": 2, "fragments_backfilled": 4}
+        assert outcome.notes == "backfill ran"
+        assert outcome.fragments_records == 1
+
+    def test_counters_set_in_transform_data_are_captured(self, tmp_path):
+        manager = _make_project(tmp_path, "[resource.shaper]\ndescription = 'x'\n")
+        (tmp_path / "resources" / "shaper.py").write_text(
+            """
+def fetch_data(existing_table):
+    return [{"id": 1}]
+
+def transform_data(data):
+    global __zeeker_report__
+    __zeeker_report__ = {"normalized": 1}
+    return data
+"""
+        )
+
+        result = manager.build_database()
+        assert result.is_valid, result.errors
+        assert result.report.resources[0].extra_counts == {"normalized": 1}
+
+    def test_counters_survive_fetch_data_crash(self, tmp_path):
+        """Enrichment work committed before fetch_data crashes must still be
+        visible on the failed outcome (and thus the JSON payload)."""
+        manager = _make_project(tmp_path, "[resource.threephase]\ndescription = 'x'\n")
+        (tmp_path / "resources" / "threephase.py").write_text(
+            """
+def fetch_data(existing_table):
+    global __zeeker_report__
+    __zeeker_report__ = {"enriched": 25}
+    raise ConnectionError("discovery endpoint down")
+"""
+        )
+
+        result = manager.build_database()
+        assert not result.is_valid
+        outcome = result.report.resources[0]
+        assert outcome.status == "failed"
+        assert outcome.extra_counts == {"enriched": 25}
+
+        payload = _build_report_payload(result.report)
+        assert payload["resources"][0]["extra_counts"] == {"enriched": 25}

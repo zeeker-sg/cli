@@ -21,14 +21,14 @@ _SKIP_KINDS: tuple[str, ...] = ("up_to_date", "blocked", "disabled")
 
 
 class Skip(Exception):
-    """Raised by a resource's ``fetch_data()`` to skip the resource with an
-    explicit, machine-readable reason.
+    """Raised by a resource's ``fetch_data()`` (or ``fetch_fragments_data()``)
+    to skip the resource with an explicit, machine-readable reason.
 
     Returning ``[]`` from fetch_data still works and renders as the classic
     "no data returned" skip (kind ``up_to_date``). Raising ``Skip`` instead
     lets a resource distinguish "nothing new" from "I could not even try":
 
-        from zeeker import Skip
+        from zeeker import Skip  # requires zeeker >= 0.9.0
 
         def fetch_data(existing_table):
             if not os.environ.get("TAILSCALE_PROXY"):
@@ -39,6 +39,28 @@ class Skip(Exception):
         up_to_date  — source checked, nothing new (default)
         blocked     — a precondition failed (proxy down, missing credential)
         disabled    — the resource is intentionally turned off (feature flag)
+
+    A ``blocked`` or ``disabled`` skip does NOT advance the resource's
+    ``_zeeker_updates.last_updated`` freshness marker — the source was never
+    checked, so time-based incremental resources must not treat the outage
+    window as covered. An ``up_to_date`` skip (raised or returned-[]) does.
+
+    Notes for resource authors:
+    - ``from zeeker import Skip`` fails on zeeker < 0.9.0 with an ImportError
+      at module load time. Repos that must stay compatible with older zeeker
+      can shim it: ``try: from zeeker import Skip``
+      ``except ImportError: class Skip(Exception): ...`` — on old zeeker the
+      shim renders as a plain resource failure rather than a clean skip, but
+      the module still loads.
+    - Skip is honored when raised from ``fetch_data`` and
+      ``fetch_fragments_data`` (the latter skips only the fragments phase).
+      Raising it inside ``transform_data``/``transform_fragments_data`` is
+      NOT part of the contract and is recorded as a transform failure.
+    - Don't raise Skip inside code wrapped by third-party retry decorators
+      that retry on all exceptions — the skip would be retried with backoff
+      and resurface as a RetryError (a failure). zeeker-common's
+      ``sync_retry``/``async_retry`` explicitly exclude Skip and pass it
+      through immediately.
     """
 
     def __init__(self, reason: str, kind: SkipKind = "up_to_date"):

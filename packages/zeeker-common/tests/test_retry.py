@@ -147,3 +147,57 @@ class TestSyncRetry:
 
         assert elapsed >= 2.0
         assert get_count() == 3
+
+
+class _Skip(Exception):
+    """Stand-in for zeeker.Skip (zeeker-common can't depend on zeeker).
+
+    The retry decorators exclude by class name, so any exception class named
+    ``Skip`` anywhere in the MRO must pass through without retries.
+    """
+
+
+_Skip.__name__ = "Skip"
+
+
+class TestSkipPassesThrough:
+    """zeeker.Skip is control flow, not a transient failure — the decorators
+    must re-raise it immediately (no backoff, no RetryError wrapping)."""
+
+    def test_sync_retry_does_not_retry_skip(self):
+        call_count = 0
+
+        @sync_retry
+        def declares_skip():
+            nonlocal call_count
+            call_count += 1
+            raise _Skip("proxy required")
+
+        with pytest.raises(_Skip):
+            declares_skip()
+        assert call_count == 1
+
+    @pytest.mark.anyio
+    async def test_async_retry_does_not_retry_skip(self):
+        call_count = 0
+
+        @async_retry
+        async def declares_skip():
+            nonlocal call_count
+            call_count += 1
+            raise _Skip("proxy required")
+
+        with pytest.raises(_Skip):
+            await declares_skip()
+        assert call_count == 1
+
+    def test_skip_subclass_also_passes_through(self):
+        class SubSkip(_Skip):
+            pass
+
+        @sync_retry
+        def declares_skip():
+            raise SubSkip("blocked")
+
+        with pytest.raises(SubSkip):
+            declares_skip()
