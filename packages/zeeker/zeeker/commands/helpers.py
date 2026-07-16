@@ -11,6 +11,7 @@ from pathlib import Path
 import click
 from dotenv import load_dotenv
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -160,6 +161,31 @@ def _relativize_traceback(tb: str) -> str:
     return _TRACEBACK_PATH_RE.sub(_sub, tb)
 
 
+def _format_counts(counts: dict[str, int]) -> str:
+    """Render extra counts as ``k1=v1 k2=v2`` (insertion order preserved)."""
+    return " ".join(f"{k}={v}" for k, v in counts.items())
+
+
+def _skip_note(outcome: ResourceOutcome) -> str:
+    """Human-readable note for a skipped resource.
+
+    With a Skip-provided reason: ``<reason> (<kind>)``. Otherwise the classic
+    ``no data returned`` (a plain returned-[] skip).
+    """
+    if outcome.skip_reason:
+        return f"{outcome.skip_reason} ({outcome.skip_kind or 'up_to_date'})"
+    return "no data returned"
+
+
+def _aggregate_extra_counts(report: BuildReport) -> dict[str, int]:
+    """Sum extra_counts across all resources (for the SUMMARY footer)."""
+    totals: dict[str, int] = {}
+    for r in report.resources:
+        for k, v in r.extra_counts.items():
+            totals[k] = totals.get(k, 0) + v
+    return totals
+
+
 def _report_overall_status(report: BuildReport) -> str:
     if report.fatal_error:
         return "fatal"
@@ -183,19 +209,28 @@ def render_resource_event(
     """
     if outcome is None:
         if console.is_terminal:
-            console.print(f"[dim]→ Building [cyan]{name}[/cyan]...[/dim]")
+            console.print(f"[dim]→ Building [cyan]{escape(name)}[/cyan]...[/dim]")
         return
 
+    counts = _format_counts(outcome.extra_counts) if outcome.extra_counts else ""
+
     if console.is_terminal:
+        # User-controlled strings (skip reasons, error messages, count keys)
+        # must be markup-escaped: a reason like "proxy down [/socks5]" would
+        # otherwise raise MarkupError inside the progress callback and turn a
+        # healthy build into a fatal error.
         glyph, _ = _STATUS_GLYPHS[outcome.status]
         if outcome.status == "success":
             detail = f"{outcome.records} records"
         elif outcome.status == "failed":
-            detail = f"[red]{outcome.error_message or 'failed'}[/red]"
+            detail = f"[red]{escape(outcome.error_message or 'failed')}[/red]"
         else:  # skipped
-            detail = "[yellow]no data returned[/yellow]"
+            detail = f"[yellow]{escape(_skip_note(outcome))}[/yellow]"
+        if counts and outcome.status != "failed":
+            detail += f"; [cyan]{escape(counts)}[/cyan]"
         console.print(
-            f"{glyph} [bold]{name}[/bold]  {detail}  " f"[dim]({outcome.duration_s:.1f}s)[/dim]"
+            f"{glyph} [bold]{escape(name)}[/bold]  {detail}  "
+            f"[dim]({outcome.duration_s:.1f}s)[/dim]"
         )
     else:
         prefix = _STATUS_GLYPHS[outcome.status][1]
@@ -204,12 +239,16 @@ def render_resource_event(
         elif outcome.status == "failed":
             note = outcome.error_message or "failed"
         else:  # skipped
-            note = "no data returned"
+            note = _skip_note(outcome)
+        if counts and outcome.status != "failed":
+            note += f"; {counts}"
         console.print(
             f"[{prefix:<4}] {name:<24} {note}  ({outcome.duration_s:.1f}s)",
             markup=False,
             highlight=False,
         )
+        for warning in outcome.warnings:
+            console.print(f"WARN[{name}]: {warning}", markup=False, highlight=False)
 
 
 def render_build_report(
@@ -246,6 +285,7 @@ def _build_report_payload(report: BuildReport) -> dict:
         "status": _report_overall_status(report),
         "total_duration_s": round(report.total_duration_s, 3),
         "resources": [asdict(r) for r in report.resources],
+        "build_warnings": list(report.build_warnings),
         "fts_error": report.fts_error,
         "fatal_error": report.fatal_error,
         "post_hook": asdict(report.post_hook) if report.post_hook is not None else None,
@@ -284,7 +324,9 @@ def _emit_json(report: BuildReport, *, console: Console) -> None:
 
 def _emit_rich(report: BuildReport, *, verbose: bool, console: Console) -> None:
     if report.fatal_error:
-        console.print(Panel(report.fatal_error, title="[red]Fatal error[/red]", border_style="red"))
+        console.print(
+            Panel(escape(report.fatal_error), title="[red]Fatal error[/red]", border_style="red")
+        )
         return
 
     if not report.resources and not report.fts_error:
@@ -309,9 +351,17 @@ def _emit_rich(report: BuildReport, *, verbose: bool, console: Console) -> None:
             notes = r.error_message or ""
             records = ""
         else:  # skipped
-            notes = "no data returned"
+            notes = _skip_note(r)
             records = ""
-        table.add_row(r.name, glyph, records, f"{r.duration_s:.1f}s", notes)
+        if r.extra_counts and r.status != "failed":
+            counts = _format_counts(r.extra_counts)
+            notes = f"{notes}; {counts}" if notes else counts
+        if r.warnings:
+            warn_note = f"⚠ {len(r.warnings)} warning{'s' if len(r.warnings) != 1 else ''}"
+            notes = f"{notes}; {warn_note}" if notes else warn_note
+        # Escape user-controlled cell content (skip reasons, error messages,
+        # count keys) so bracketed tokens can't raise MarkupError or vanish.
+        table.add_row(escape(r.name), glyph, records, f"{r.duration_s:.1f}s", escape(notes))
 
     console.print(table)
 
@@ -319,29 +369,38 @@ def _emit_rich(report: BuildReport, *, verbose: bool, console: Console) -> None:
     failed = len(report.failed)
     skipped = len(report.skipped)
     total = len(report.resources)
+    totals = _aggregate_extra_counts(report)
+    totals_note = f" | {escape(_format_counts(totals))}" if totals else ""
     console.print(
         f"[bold]{succeeded} of {total} resources succeeded[/bold] "
-        f"({failed} failed, {skipped} skipped) in {report.total_duration_s:.1f}s"
+        f"({failed} failed, {skipped} skipped) in {report.total_duration_s:.1f}s{totals_note}"
     )
 
+    if verbose:
+        for r in report.resources:
+            for warning in r.warnings:
+                console.print(f"[yellow]⚠ {escape(r.name)}:[/yellow] {escape(warning)}")
+        for warning in report.build_warnings:
+            console.print(f"[yellow]⚠ build:[/yellow] {escape(warning)}")
+
     if report.fts_error:
-        console.print(f"[red]FTS setup failed:[/red] {report.fts_error}")
+        console.print(f"[red]FTS setup failed:[/red] {escape(report.fts_error)}")
 
     if report.post_hook is not None:
         hook = report.post_hook
         colour = "green" if hook.exit_code == 0 else "red"
         console.print(
-            f"[bold]post-hook:[/bold] [dim]{hook.command}[/dim] "
+            f"[bold]post-hook:[/bold] [dim]{escape(hook.command)}[/dim] "
             f"→ [{colour}]exit {hook.exit_code}[/{colour}]"
         )
         if verbose and hook.exit_code != 0:
             body = ""
             if hook.stdout:
-                body += f"[bold]stdout[/bold]\n{hook.stdout}"
+                body += f"[bold]stdout[/bold]\n{escape(hook.stdout)}"
             if hook.stderr:
                 if body:
                     body += "\n"
-                body += f"[bold]stderr[/bold]\n{hook.stderr}"
+                body += f"[bold]stderr[/bold]\n{escape(hook.stderr)}"
             if body:
                 console.print(Panel(body, title="[red]post-hook output[/red]", border_style="red"))
 
@@ -350,8 +409,8 @@ def _emit_rich(report: BuildReport, *, verbose: bool, console: Console) -> None:
             if r.traceback:
                 console.print(
                     Panel(
-                        _relativize_traceback(r.traceback),
-                        title=f"[red]Traceback · {r.name}[/red]",
+                        escape(_relativize_traceback(r.traceback)),
+                        title=f"[red]Traceback · {escape(r.name)}[/red]",
                         border_style="red",
                     )
                 )
@@ -364,12 +423,17 @@ def _emit_plain(report: BuildReport, *, verbose: bool, console: Console) -> None
         console.print(f"FATAL: {report.fatal_error}", markup=False, highlight=False)
         return
 
+    for warning in report.build_warnings:
+        console.print(f"WARN[build]: {warning}", markup=False, highlight=False)
+
     succeeded = len(report.succeeded)
     failed = len(report.failed)
     skipped = len(report.skipped)
+    totals = _aggregate_extra_counts(report)
+    totals_note = f" | {_format_counts(totals)}" if totals else ""
     console.print(
         f"SUMMARY: {succeeded} succeeded, {failed} failed, {skipped} skipped "
-        f"in {report.total_duration_s:.1f}s",
+        f"in {report.total_duration_s:.1f}s{totals_note}",
         markup=False,
         highlight=False,
     )

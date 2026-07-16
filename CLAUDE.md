@@ -36,6 +36,42 @@ zeeker/{cli.py,commands/{assets.py,metadata.py,helpers.py}}
 Sibling imports work: resource modules can `import helper` for helpers in `resources/` — import at module top level only (dir is appended to sys.path just for the load, lowest precedence, then removed; stdlib/site-packages always win name clashes)
 `--setup-fts` is idempotent (safe on incremental `--sync-from-s3` builds)
 
+## Status Contract (unambiguous build output)
+**Skip with reason**: raise `Skip` from fetch_data instead of returning `[]` to say WHY:
+```python
+from zeeker import Skip  # requires zeeker>=0.9.0; kinds: "up_to_date" (default), "blocked", "disabled"
+
+def fetch_data(existing_table):
+    if not os.environ.get("TAILSCALE_PROXY"):
+        raise Skip("TAILSCALE_PROXY unset — proxy required", kind="blocked")
+    return []  # plain [] still works → skip with kind "up_to_date", no reason
+```
+Renders `[SKIP] name  <reason> (kind)  (1.2s)`; `skip_reason`/`skip_kind` in `--json`. Works in sync + async fetch_data and in fetch_fragments_data (skips just the fragments phase); safe with `fragments_on_skip` (fragments run with context `[]`). `zeeker build --fail-on-blocked` → exit 1 if any resource skipped with kind "blocked". "blocked"/"disabled" skips do NOT bump `_zeeker_updates.last_updated` (source wasn't checked — time-based incremental resources stay safe); "up_to_date" does. Caveats: on zeeker<0.9.0 the import is an ImportError → hard failure (shim with `try/except ImportError` if the repo must support both); don't raise Skip inside retry-wrapped code except zeeker-common's `sync_retry`/`async_retry`, which pass Skip through without retrying. Not honored in `transform_data` (recorded as transform failure).
+
+**Enrichment counters** (`__zeeker_report__`): multi-phase resources that UPDATE rows (0 records inserted) report work via a module-level dict, read + cleared on every exit path (success, skip, even a fetch_data crash — work done before the crash stays visible) and re-read after the fragments phase (counters set in fetch_fragments_data merge in, summing on key collision):
+```python
+def fetch_data(existing_table):
+    global __zeeker_report__
+    __zeeker_report__ = {"updated": 50, "enriched": 25, "notes": "phase2 drained 25"}
+    return []  # renders "[SKIP] judgments  no data returned; updated=50 enriched=25"
+```
+Int values only (others ignored, never fails the build); totals appear in the SUMMARY footer; `extra_counts`/`notes` in `--json`.
+
+**Warnings are machine-readable**: per-resource warnings → `ResourceOutcome.warnings` (`WARN[resource]: ...` lines in plain mode), build-level warnings (e.g. S3 sync) → `BuildReport.build_warnings` (`WARN[build]: ...`); both in the `--json` payload.
+
+**Resource logging** (zeeker-common): consistent per-resource log lines + optional JSONL sink (`ZEEKER_BUILDLOG_JSONL=/path/to/file.jsonl`):
+```python
+from zeeker_common import resource_logger
+
+log = resource_logger("judgments")
+log.info("discovery starting")            # stdout: "judgments: discovery starting"
+log.warn("proxy slow"); log.error("boom") # stderr
+log.done(new=3, updated=50)               # "judgments: done — 3 new, 50 updated"
+log.aborted("circuit breaker", failed=5)  # stderr: "judgments: ABORTED (circuit breaker) — 5 failed"
+log.skipped("nothing new")                # stderr: "judgments: SKIPPED (nothing new)"
+```
+Count grammar is noun-first (`3 new, 2 skipped, 0 failed`) — matches the data repos' Build Monitoring Guide regexes (`(\d+) new`); underscores in count names render as spaces.
+
 ## CRITICAL: Duplicate Handling
 MUST filter existing IDs to avoid UNIQUE constraint errors:
 ```python

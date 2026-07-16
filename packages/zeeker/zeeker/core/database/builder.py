@@ -17,6 +17,7 @@ from ..schema import SchemaManager
 from ..types import (
     BuildReport,
     ResourceOutcome,
+    Skip,
     ValidationResult,
     ZeekerProject,
     ZeekerSchemaConflictError,
@@ -92,10 +93,12 @@ class DatabaseBuilder:
                 result.errors.extend(sync_result.errors)
                 # Don't fail build if S3 sync fails - just warn
                 result.warnings.append("S3 sync failed but continuing with local build")
+                report.build_warnings.append("S3 sync failed but continuing with local build")
             else:
                 result.info.extend(sync_result.info)
             if sync_result.warnings:
                 result.warnings.extend(sync_result.warnings)
+                report.build_warnings.extend(sync_result.warnings)
 
         # Open existing database or create new one using sqlite-utils
         # Don't delete existing database - let resources check existing data for duplicates
@@ -115,6 +118,7 @@ class DatabaseBuilder:
             if max_parallel > 1 and len(resources_to_build) > 1:
                 prewarm_warnings = self._prewarm_fetches(db, resources_to_build, max_parallel)
                 result.warnings.extend(prewarm_warnings)
+                report.build_warnings.extend(prewarm_warnings)
 
             # Process each specified resource
             for resource_name in resources_to_build:
@@ -128,6 +132,10 @@ class DatabaseBuilder:
                 duration = time.perf_counter() - resource_started
 
                 outcome = self._build_resource_outcome(resource_name, resource_result, duration)
+
+                # Per-resource warnings surface both in the text stream and
+                # in the machine-readable outcome.
+                result.warnings.extend(resource_result.warnings)
 
                 if not resource_result.is_valid:
                     result.errors.extend(resource_result.errors)
@@ -178,6 +186,28 @@ class DatabaseBuilder:
                         else:
                             result.info.extend(fragments_result.info)
                             outcome.fragments_records = fragments_result.records
+                        if fragments_result.warnings:
+                            result.warnings.extend(fragments_result.warnings)
+                            outcome.warnings.extend(fragments_result.warnings)
+
+                        # Resource code that runs during the fragments phase
+                        # (fetch_fragments_data / transform_fragments_data)
+                        # may set fresh __zeeker_report__ counters after the
+                        # processor's first read — consume again and merge
+                        # into the outcome so that work isn't dropped.
+                        if resource_result.module is not None:
+                            post_report = ValidationResult(is_valid=True)
+                            self.processor._consume_zeeker_report(
+                                resource_result.module, post_report
+                            )
+                            for key, value in post_report.extra_counts.items():
+                                outcome.extra_counts[key] = outcome.extra_counts.get(key, 0) + value
+                            if post_report.notes:
+                                outcome.notes = (
+                                    f"{outcome.notes}; {post_report.notes}"
+                                    if outcome.notes
+                                    else post_report.notes
+                                )
 
                 report.resources.append(outcome)
                 if progress_callback:
@@ -196,6 +226,7 @@ class DatabaseBuilder:
                     result.info.extend(fts_result.info)
                     if fts_result.warnings:
                         result.warnings.extend(fts_result.warnings)
+                        report.build_warnings.extend(fts_result.warnings)
             elif result.is_valid and not setup_fts:
                 result.info.append("Skipped FTS setup (use --setup-fts flag to enable)")
 
@@ -219,7 +250,11 @@ class DatabaseBuilder:
     def _build_resource_outcome(
         resource_name: str, resource_result: ValidationResult, duration_s: float
     ) -> ResourceOutcome:
-        """Construct a ResourceOutcome from a per-resource ValidationResult."""
+        """Construct a ResourceOutcome from a per-resource ValidationResult.
+
+        Skip detection is driven by the typed ``ValidationResult.skipped``
+        flag set by the processor — never by string-matching info messages.
+        """
         if not resource_result.is_valid:
             return ResourceOutcome(
                 name=resource_name,
@@ -229,14 +264,22 @@ class DatabaseBuilder:
                     resource_result.errors[0] if resource_result.errors else "unknown error"
                 ),
                 traceback=(resource_result.tracebacks[0] if resource_result.tracebacks else None),
+                warnings=list(resource_result.warnings),
+                extra_counts=dict(resource_result.extra_counts),
+                notes=resource_result.notes,
             )
 
-        is_skipped = any("No data returned" in msg for msg in resource_result.info)
+        is_skipped = resource_result.skipped
         return ResourceOutcome(
             name=resource_name,
             status="skipped" if is_skipped else "success",
             records=resource_result.records or 0,
             duration_s=duration_s,
+            skip_reason=resource_result.skip_reason if is_skipped else None,
+            skip_kind=resource_result.skip_kind if is_skipped else None,
+            warnings=list(resource_result.warnings),
+            extra_counts=dict(resource_result.extra_counts),
+            notes=resource_result.notes,
         )
 
     def _process_resource_with_schema_check(
@@ -291,6 +334,12 @@ class DatabaseBuilder:
                             db, resource_name, sample_data, module
                         )
                         result.info.extend(schema_result.info)
+                except Skip:
+                    # The resource declared a skip during the sample fetch.
+                    # Not a schema-check error and must not fail the build —
+                    # the main phase below re-observes the (cached) Skip and
+                    # records the proper skipped outcome.
+                    pass
                 except Exception as e:
                     if isinstance(e, ZeekerSchemaConflictError):
                         raise
@@ -304,6 +353,14 @@ class DatabaseBuilder:
 
             # Process the resource (pass pre-loaded module to avoid redundant load)
             resource_result = self.processor.process_resource(db, resource_name, module)
+            result.warnings.extend(resource_result.warnings)
+            # Thread the typed status contract through: skip flag/reason/kind
+            # and any __zeeker_report__ counters from the processor.
+            result.skipped = resource_result.skipped
+            result.skip_reason = resource_result.skip_reason
+            result.skip_kind = resource_result.skip_kind
+            result.extra_counts = resource_result.extra_counts
+            result.notes = resource_result.notes
             if not resource_result.is_valid:
                 result.errors.extend(resource_result.errors)
                 result.tracebacks.extend(resource_result.tracebacks)
@@ -315,11 +372,20 @@ class DatabaseBuilder:
                 # fragments phase (main_data_context).
                 result.raw_data = resource_result.raw_data
 
-                # Update resource timestamps
-                duration_ms = int((time.time() - start_time) * 1000)
-                self.schema_manager.update_resource_timestamps(
-                    db, resource_name, build_id, duration_ms
+                # Update resource timestamps — but only when the source was
+                # actually checked (success or an up_to_date skip). A skip
+                # with kind "blocked" or "disabled" means "I could not even
+                # look"; advancing _zeeker_updates.last_updated would make
+                # time-based incremental resources permanently miss anything
+                # published while the source was unreachable/disabled.
+                source_was_checked = not (
+                    resource_result.skipped and resource_result.skip_kind in ("blocked", "disabled")
                 )
+                if source_was_checked:
+                    duration_ms = int((time.time() - start_time) * 1000)
+                    self.schema_manager.update_resource_timestamps(
+                        db, resource_name, build_id, duration_ms
+                    )
 
         except ZeekerSchemaConflictError as e:
             result.is_valid = False
@@ -385,6 +451,10 @@ class DatabaseBuilder:
                 main_data_context = self.processor.async_executor.call_fetch_data(
                     fetch_data, existing_table, resource_name=resource_name
                 )
+            except Skip:
+                # Resource declared a skip — same context shape as a
+                # returned-[] skip with fragments_on_skip.
+                main_data_context = []
             except Exception as e:
                 # If we can't get context, fragments will work without it — but
                 # surface the reason rather than swallowing the exception silently.
@@ -457,6 +527,12 @@ class DatabaseBuilder:
 
         results = asyncio.run(run_all())
         for name, data, err in results:
+            if isinstance(err, Skip):
+                # Not a failure: the resource declared a skip. Pre-warm the
+                # Skip itself so the sequential loop observes the same
+                # outcome without re-running fetch_data().
+                self.processor.async_executor.set_prewarmed(name, err)
+                continue
             if err is not None:
                 warnings.append(
                     f"Parallel pre-fetch failed for '{name}' "
