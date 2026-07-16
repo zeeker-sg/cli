@@ -6,6 +6,7 @@
 - `uv run zeeker build [resource1] [resource2]` (selective building)
 - `uv run zeeker assets generate|validate|deploy|list`
 - `uv run zeeker metadata generate|show` `--all --dry-run --force --project --resource`
+- `uv run zeeker runbook` `--output PATH --force` (generate RUNBOOK.md: auto facts + status contract + TODO sections; --force overwrites the ENTIRE file, hand-written content included)
 
 ## Architecture
 **Workspace structure**: Core CLI (zeeker) + shared utilities (zeeker-common) + deployment (zeeker-datasette)
