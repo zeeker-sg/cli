@@ -207,8 +207,10 @@ class DatabaseBuilder:
             report.fatal_error = msg
 
         finally:
-            # Prevent stale pre-warmed data from leaking into a reused builder.
-            self.processor.async_executor.clear_prewarmed()
+            # Prevent per-build state (pre-warmed fetches, fetch cache,
+            # loaded resource modules, sibling helper modules in
+            # sys.modules) from leaking into a later build in this process.
+            self.processor.clear_build_caches()
 
         report.total_duration_s = time.perf_counter() - build_started
         return result

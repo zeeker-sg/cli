@@ -5,6 +5,7 @@ This module handles loading resource modules, executing data functions,
 applying transformations, and inserting data into SQLite databases.
 """
 
+import copy
 import importlib.util
 import inspect
 import sqlite3
@@ -33,6 +34,33 @@ class ResourceProcessor:
         self.resources_path = resources_path
         self.schema_manager = schema_manager
         self.async_executor = AsyncExecutor()
+        # Per-build cache of loaded resource modules, keyed by resource name.
+        # Guarantees each resource module is imported exactly once per build,
+        # including under parallel pre-warm (the pre-warm and the sequential
+        # loop must operate on the SAME module instance so module-level state
+        # written by fetch_data survives into the fragments phase).
+        self._module_cache: Dict[str, Any] = {}
+        # Sibling modules (helpers in resources/) registered in sys.modules
+        # during resource loads, keyed by module name. Tracked so they can be
+        # purged between builds — otherwise two projects with a same-named
+        # helper (e.g. resources/extraction.py) would silently share the
+        # first project's module in a long-lived process.
+        self._sibling_modules: Dict[str, Any] = {}
+
+    def clear_build_caches(self) -> None:
+        """Drop all per-build state. Call when a build finishes.
+
+        Clears the loaded-module cache, unregisters sibling helper modules
+        from sys.modules (only if they are still the objects we loaded), and
+        clears the executor's fetch cache and pre-warmed data.
+        """
+        self._module_cache.clear()
+        for name, mod in self._sibling_modules.items():
+            if sys.modules.get(name) is mod:
+                del sys.modules[name]
+        self._sibling_modules.clear()
+        self.async_executor.clear_prewarmed()
+        self.async_executor.clear_fetch_cache()
 
     def process_resource(
         self, db: sqlite_utils.Database, resource_name: str, module: Any = None
@@ -80,8 +108,13 @@ class ResourceProcessor:
 
             # Expose the raw fetch output so the builder can thread it into
             # the fragments phase as main_data_context without re-running
-            # fetch_data().
-            result.raw_data = raw_data
+            # fetch_data(). When a transform exists, snapshot with deepcopy
+            # first: transform_data() commonly mutates rows in place, and the
+            # fragments phase is documented to receive the PRE-transform data.
+            if hasattr(module, "transform_data"):
+                result.raw_data = copy.deepcopy(raw_data)
+            else:
+                result.raw_data = raw_data
 
             if not raw_data:
                 result.info.append(f"No data returned for resource '{resource_name}' - skipping")
@@ -238,32 +271,64 @@ class ResourceProcessor:
         """
         result = ValidationResult(is_valid=True)
 
+        # Serve from the per-build cache: each resource module must be
+        # imported exactly once per build (parallel pre-warm and the
+        # sequential loop must share the same instance so module-level
+        # state written by fetch_data reaches the fragments phase).
+        cached = self._module_cache.get(resource_name)
+        if cached is not None:
+            result.data = cached
+            return result
+
         resource_file = self.resources_path / f"{resource_name}.py"
         if not resource_file.exists():
             result.is_valid = False
             result.errors.append(f"Resource file not found: {resource_file}")
             return result
 
-        try:
-            # Make sibling modules in resources/ importable (e.g.
-            # ``import extraction`` from resources/judgments.py). Resource
-            # modules are loaded by file path with no package context, so
-            # without this, sibling imports require a manual sys.path shim
-            # in every resource file.
-            resources_dir = str(self.resources_path)
-            if resources_dir not in sys.path:
-                sys.path.insert(0, resources_dir)
+        # Make sibling modules in resources/ importable (e.g.
+        # ``import extraction`` from resources/judgments.py). Resource
+        # modules are loaded by file path with no package context, so
+        # without this, sibling imports require a manual sys.path shim
+        # in every resource file. The directory is APPENDED (lowest
+        # precedence, so resources/*.py can never shadow stdlib or
+        # site-packages) and removed again after the load — sibling
+        # imports therefore must happen at module top level.
+        resources_dir = str(self.resources_path)
+        path_added = resources_dir not in sys.path
+        if path_added:
+            sys.path.append(resources_dir)
+        modules_before = set(sys.modules)
 
+        try:
             # Dynamically import the resource module
             spec = importlib.util.spec_from_file_location(resource_name, resource_file)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             result.data = module
+            self._module_cache[resource_name] = module
 
         except Exception as e:
             result.is_valid = False
             result.errors.append(f"Failed to load resource module '{resource_name}': {e}")
             result.tracebacks.append(traceback.format_exc())
+
+        finally:
+            if path_added and resources_dir in sys.path:
+                sys.path.remove(resources_dir)
+            # Track sibling modules that landed in sys.modules from
+            # resources/ so clear_build_caches() can purge them — they must
+            # not leak into other projects' builds in the same process.
+            for name in set(sys.modules) - modules_before:
+                mod = sys.modules.get(name)
+                mod_file = getattr(mod, "__file__", None)
+                if not mod_file:
+                    continue
+                try:
+                    if Path(mod_file).resolve().is_relative_to(Path(resources_dir).resolve()):
+                        self._sibling_modules[name] = mod
+                except (OSError, ValueError):
+                    continue
 
         return result
 

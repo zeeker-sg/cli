@@ -40,6 +40,10 @@ class AsyncExecutor:
         """Drop all pre-warmed overrides. Call between builds."""
         self._prewarmed.clear()
 
+    def clear_fetch_cache(self) -> None:
+        """Drop all cached fetch_data results. Call between builds."""
+        self._fetch_cache.clear()
+
     def call_fetch_data(
         self, fetch_data_func: Callable, existing_table: Optional[Table], resource_name: str = None
     ) -> List[Dict[str, Any]]:
@@ -113,22 +117,24 @@ class AsyncExecutor:
     def _generate_cache_key(self, resource_name: str, existing_table: Optional[Table]) -> str:
         """Generate cache key for fetch_data results.
 
+        The key is the resource name alone — stable for the duration of a
+        build. Keying on live table state (e.g. row count) would let an
+        intermediate step that changes the table — such as a user-supplied
+        migrate_schema() deleting rows between the schema-check fetch and
+        the insert fetch — miss the cache and run fetch_data a second time
+        in the same build, double-spending side effects (API budgets,
+        checkpoints). The cache is cleared between builds by
+        :meth:`clear_fetch_cache`.
+
         Args:
             resource_name: Name of the resource
-            existing_table: sqlite-utils Table object or None
+            existing_table: sqlite-utils Table object or None (unused; kept
+                for signature stability)
 
         Returns:
-            Cache key string combining resource name and table state
+            Cache key string
         """
-        if existing_table is None:
-            return f"{resource_name}_no_table"
-
-        try:
-            table_count = existing_table.count
-            return f"{resource_name}_table_{table_count}"
-        except Exception:
-            # If we can't get count, use basic key
-            return f"{resource_name}_table_exists"
+        return resource_name
 
     def call_fetch_fragments_data(
         self,
