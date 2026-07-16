@@ -9,6 +9,7 @@ the three-pass asset system.
 from .core import (
     DatabaseCustomization,
     DeploymentChanges,
+    Skip,
     ValidationResult,
     ZeekerDeployer,
     ZeekerGenerator,
@@ -17,8 +18,9 @@ from .core import (
     ZeekerValidator,
 )
 
-__version__ = "0.6.0"
+__version__ = "0.9.0"
 __all__ = [
+    "Skip",
     "ValidationResult",
     "DatabaseCustomization",
     "DeploymentChanges",

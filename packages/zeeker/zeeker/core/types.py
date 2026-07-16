@@ -15,6 +15,40 @@ META_TABLE_UPDATES = "_zeeker_updates"
 META_TABLE_NAMES = [META_TABLE_SCHEMAS, META_TABLE_UPDATES]
 
 
+SkipKind = Literal["up_to_date", "blocked", "disabled"]
+
+_SKIP_KINDS: tuple[str, ...] = ("up_to_date", "blocked", "disabled")
+
+
+class Skip(Exception):
+    """Raised by a resource's ``fetch_data()`` to skip the resource with an
+    explicit, machine-readable reason.
+
+    Returning ``[]`` from fetch_data still works and renders as the classic
+    "no data returned" skip (kind ``up_to_date``). Raising ``Skip`` instead
+    lets a resource distinguish "nothing new" from "I could not even try":
+
+        from zeeker import Skip
+
+        def fetch_data(existing_table):
+            if not os.environ.get("TAILSCALE_PROXY"):
+                raise Skip("TAILSCALE_PROXY unset — proxy required", kind="blocked")
+            ...
+
+    Kinds:
+        up_to_date  — source checked, nothing new (default)
+        blocked     — a precondition failed (proxy down, missing credential)
+        disabled    — the resource is intentionally turned off (feature flag)
+    """
+
+    def __init__(self, reason: str, kind: SkipKind = "up_to_date"):
+        if kind not in _SKIP_KINDS:
+            raise ValueError(f"Skip kind must be one of {_SKIP_KINDS}, got {kind!r}")
+        self.reason = reason
+        self.kind = kind
+        super().__init__(reason)
+
+
 class ZeekerSchemaConflictError(Exception):
     """Raised when schema changes detected without migration handler."""
 
@@ -68,6 +102,19 @@ class ResourceOutcome:
     error_message: str | None = None
     traceback: str | None = None
     fragments_records: int | None = None
+    # Skip metadata (only meaningful when status == "skipped"). A resource
+    # that raised Skip(reason, kind=...) carries its reason/kind here; a
+    # plain "returned []" skip has skip_kind "up_to_date" and no reason.
+    skip_reason: str | None = None
+    skip_kind: SkipKind | None = None
+    # Per-resource warnings (e.g. schema sample fetch failures) so the
+    # machine-readable payload carries the same signal as the text logs.
+    warnings: list[str] = field(default_factory=list)
+    # Optional counters reported by the resource via a module-level
+    # ``__zeeker_report__`` dict — makes enrichment/update work visible
+    # even when no new rows were inserted (records == 0).
+    extra_counts: dict[str, int] = field(default_factory=dict)
+    notes: str | None = None
 
 
 @dataclass
@@ -78,6 +125,9 @@ class BuildReport:
     total_duration_s: float = 0.0
     fts_error: str | None = None
     fatal_error: str | None = None
+    # Build-level warnings (e.g. "S3 sync failed but continuing") — carried
+    # into the JSON payload so machine consumers see the same signal as logs.
+    build_warnings: list[str] = field(default_factory=list)
     # Set to a PostHookResult dataclass when --post-hook ran. Annotated as
     # ``object`` to avoid a circular import between this module and
     # commands/post_hook.py; dataclasses.asdict() still recurses correctly
@@ -108,6 +158,15 @@ class ValidationResult:
     tracebacks: list[str] = field(default_factory=list)
     report: "BuildReport | None" = None
     records: int | None = None
+    # Typed skip propagation from the processor (replaces string-matching on
+    # info messages). ``skipped`` is True when fetch_data returned no rows or
+    # raised Skip; reason/kind carry the Skip's payload when one was raised.
+    skipped: bool = False
+    skip_reason: str | None = None
+    skip_kind: "SkipKind | None" = None
+    # Counters reported by the resource via module-level __zeeker_report__.
+    extra_counts: dict[str, int] = field(default_factory=dict)
+    notes: str | None = None
     # Generic payload (e.g. a loaded resource module from _load_resource_module).
     data: Any = None
     # Loaded resource module from the main build phase. Threaded through to

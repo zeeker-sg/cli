@@ -192,6 +192,11 @@ def add(
     help="Treat resources that returned no data as failures (exit 1 instead of passing)",
 )
 @click.option(
+    "--fail-on-blocked",
+    is_flag=True,
+    help="Exit 1 if any resource skipped with kind 'blocked' (raised Skip(..., kind='blocked'))",
+)
+@click.option(
     "--progress-file",
     type=click.Path(),
     help="Write a JSON BuildReport snapshot to this path after each resource (atomic overwrite). "
@@ -226,6 +231,7 @@ def build(
     verbose,
     as_json,
     fail_on_empty,
+    fail_on_blocked,
     progress_file,
     parallel,
     post_hook,
@@ -238,7 +244,9 @@ def build(
 
     Exit codes:
         0  all resources succeeded
-        1  one or more resources failed, FTS setup failed, or post-hook exited non-zero
+        1  one or more resources failed, FTS setup failed, post-hook exited non-zero,
+           --fail-on-empty with a skipped resource, or --fail-on-blocked with a
+           resource that skipped with kind "blocked"
         2  fatal error (schema conflict, DB open failure, config error, local-diverged sync)
 
     The --post-hook command receives these env vars:
@@ -322,7 +330,9 @@ def build(
         fatal_msg = result.errors[0] if result.errors else "build failed"
         result.report = BuildReport(fatal_error=fatal_msg)
 
-    if result.warnings and not as_json:
+    # In plain (non-TTY) text mode, warnings already stream as WARN[...] lines
+    # via render_resource_event/_emit_plain — avoid printing them twice.
+    if result.warnings and not as_json and console.is_terminal:
         echo_warnings(result)
 
     report = result.report
@@ -361,6 +371,14 @@ def build(
             console.print(
                 f"[red]Exiting non-zero: {len(report.skipped)} resource(s) returned no data "
                 "and --fail-on-empty is set.[/red]"
+            )
+        raise click.exceptions.Exit(1)
+    blocked = [r for r in report.skipped if r.skip_kind == "blocked"]
+    if fail_on_blocked and blocked:
+        if not as_json:
+            console.print(
+                f"[red]Exiting non-zero: {len(blocked)} resource(s) skipped as blocked "
+                "and --fail-on-blocked is set.[/red]"
             )
         raise click.exceptions.Exit(1)
 

@@ -17,7 +17,7 @@ from typing import Any, Dict, List
 import sqlite_utils
 
 from ..schema import SchemaManager
-from ..types import ValidationResult
+from ..types import Skip, ValidationResult
 from .async_executor import AsyncExecutor
 
 
@@ -96,10 +96,25 @@ class ResourceProcessor:
             # Check if table already exists to pass to fetch_data
             existing_table = db[resource_name] if db[resource_name].exists() else None
 
-            # Fetch the data
-            raw_data = self.async_executor.call_fetch_data(
-                fetch_data, existing_table, resource_name=resource_name
-            )
+            # Fetch the data. A resource may raise Skip(reason, kind=...)
+            # instead of returning [] to declare WHY it is skipping
+            # (up_to_date vs blocked vs disabled).
+            try:
+                raw_data = self.async_executor.call_fetch_data(
+                    fetch_data, existing_table, resource_name=resource_name
+                )
+            except Skip as skip:
+                result.skipped = True
+                result.skip_reason = skip.reason
+                result.skip_kind = skip.kind
+                # An empty context is a valid fragments context (same shape
+                # as a returned-[] skip with fragments_on_skip).
+                result.raw_data = []
+                result.info.append(
+                    f"Resource '{resource_name}' skipped ({skip.kind}): {skip.reason}"
+                )
+                self._consume_zeeker_report(module, result)
+                return result
 
             if not isinstance(raw_data, list):
                 result.is_valid = False
@@ -116,7 +131,14 @@ class ResourceProcessor:
             else:
                 result.raw_data = raw_data
 
+            # Optional counters reported by the resource (module-level
+            # __zeeker_report__): read on every code path so enrichment
+            # work is visible even when no new rows come back.
+            self._consume_zeeker_report(module, result)
+
             if not raw_data:
+                result.skipped = True
+                result.skip_kind = "up_to_date"
                 result.info.append(f"No data returned for resource '{resource_name}' - skipping")
                 return result
 
@@ -161,6 +183,52 @@ class ResourceProcessor:
             result.tracebacks.append(traceback.format_exc())
 
         return result
+
+    def _consume_zeeker_report(self, module: Any, result: ValidationResult) -> None:
+        """Read (and clear) an optional module-level ``__zeeker_report__`` dict.
+
+        Resources may report enrichment/update counters that don't show up as
+        inserted rows, e.g.::
+
+            def fetch_data(existing_table):
+                global __zeeker_report__
+                __zeeker_report__ = {"updated": 50, "enriched": 25,
+                                     "notes": "phase2 drained 25"}
+                return []
+
+        Validation is deliberately lenient: non-int values are ignored (except
+        the optional ``notes`` string) and a malformed report never fails the
+        build. The attribute is deleted after reading so a reused module can't
+        leak stale counts into a later resource or build.
+        """
+        try:
+            report = getattr(module, "__zeeker_report__", None)
+            if report is None:
+                return
+            try:
+                delattr(module, "__zeeker_report__")
+            except Exception:
+                pass
+            if not isinstance(report, dict):
+                return
+            counts: Dict[str, int] = {}
+            notes = None
+            for key, value in report.items():
+                if not isinstance(key, str):
+                    continue
+                if key == "notes":
+                    if isinstance(value, str):
+                        notes = value
+                    continue
+                if isinstance(value, bool):
+                    continue  # bools are ints in Python; not meaningful counts
+                if isinstance(value, int):
+                    counts[key] = value
+            result.extra_counts = counts
+            result.notes = notes
+        except Exception:
+            # Defensive: a broken report must never fail the build.
+            pass
 
     def process_fragments_data(
         self,

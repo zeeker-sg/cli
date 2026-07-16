@@ -11,6 +11,8 @@ from typing import Any, Callable, Dict, List, Optional
 
 from sqlite_utils.db import Table
 
+from ..types import Skip
+
 
 class AsyncExecutor:
     """Handles execution of both sync and async resource functions."""
@@ -31,9 +33,10 @@ class AsyncExecutor:
         # fragments-context without re-running the user's fetch_data().
         self._prewarmed: Dict[str, List[Dict[str, Any]]] = {}
 
-    def set_prewarmed(self, resource_name: str, data: List[Dict[str, Any]]) -> None:
+    def set_prewarmed(self, resource_name: str, data: "List[Dict[str, Any]] | Skip") -> None:
         """Register a fetch result to be returned by subsequent ``call_fetch_data``
-        calls for ``resource_name`` within this build."""
+        calls for ``resource_name`` within this build. A ``Skip`` instance may
+        be registered instead of data; it is re-raised on each call."""
         self._prewarmed[resource_name] = data
 
     def clear_prewarmed(self) -> None:
@@ -57,9 +60,14 @@ class AsyncExecutor:
         Returns:
             List[Dict[str, Any]]: The data returned by fetch_data
         """
-        # Serve from the parallel pre-warm override if present.
+        # Serve from the parallel pre-warm override if present. A pre-warmed
+        # Skip is re-raised so the sequential loop observes the same outcome
+        # without re-running the user's fetch_data().
         if resource_name and resource_name in self._prewarmed:
-            return self._prewarmed[resource_name]
+            prewarmed = self._prewarmed[resource_name]
+            if isinstance(prewarmed, Skip):
+                raise prewarmed
+            return prewarmed
 
         # Check cache if resource_name is provided and caching is enabled.
         cache_key = (
@@ -68,13 +76,24 @@ class AsyncExecutor:
             else None
         )
         if cache_key and cache_key in self._fetch_cache:
-            return self._fetch_cache[cache_key]
+            cached = self._fetch_cache[cache_key]
+            if isinstance(cached, Skip):
+                raise cached
+            return cached
 
-        # Execute the function
-        if inspect.iscoroutinefunction(fetch_data_func):
-            result = self._run_async_function(fetch_data_func, existing_table)
-        else:
-            result = fetch_data_func(existing_table)
+        # Execute the function. A Skip raised by the resource is cached like
+        # a result — the single-fetch-per-build guarantee must hold even when
+        # fetch_data declares a skip (e.g. the schema-check sample fetch and
+        # the insert fetch must not each invoke fetch_data).
+        try:
+            if inspect.iscoroutinefunction(fetch_data_func):
+                result = self._run_async_function(fetch_data_func, existing_table)
+            else:
+                result = fetch_data_func(existing_table)
+        except Skip as skip:
+            if cache_key:
+                self._fetch_cache[cache_key] = skip
+            raise
 
         # Cache the result if caching is active.
         if cache_key:
@@ -101,13 +120,21 @@ class AsyncExecutor:
             else None
         )
         if cache_key and cache_key in self._fetch_cache:
-            return self._fetch_cache[cache_key]
+            cached = self._fetch_cache[cache_key]
+            if isinstance(cached, Skip):
+                raise cached
+            return cached
 
-        if inspect.iscoroutinefunction(fetch_data_func):
-            result = await fetch_data_func(existing_table)
-        else:
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, fetch_data_func, existing_table)
+        try:
+            if inspect.iscoroutinefunction(fetch_data_func):
+                result = await fetch_data_func(existing_table)
+            else:
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(None, fetch_data_func, existing_table)
+        except Skip as skip:
+            if cache_key:
+                self._fetch_cache[cache_key] = skip
+            raise
 
         if cache_key:
             self._fetch_cache[cache_key] = result
