@@ -12,6 +12,7 @@ on:
         type: choice
         options:
           - zeeker
+          - zeeker-common
 
 permissions:
   contents: read
@@ -20,6 +21,12 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      contents: read
+      # Required for PyPI Trusted Publishing (OIDC). Without it GitHub does
+      # not expose ACTIONS_ID_TOKEN_REQUEST_URL to the job and `uv publish`
+      # fails with "Trusted publishing failed ... Missing credentials".
+      id-token: write
     steps:
     - uses: actions/checkout@v4
 
@@ -32,7 +39,8 @@ jobs:
       uses: astral-sh/setup-uv@v3
 
     - name: Build package
-      run: uv build --package zeeker
+      # Release events carry no workflow_dispatch input — default to zeeker.
+      run: uv build --package ${{ inputs.package || 'zeeker' }}
 
     - name: Publish to PyPI
       run: uv publish dist/*
