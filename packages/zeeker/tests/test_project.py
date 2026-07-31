@@ -731,4 +731,52 @@ class TestMetaTableUtilities:
         assert "Schema conflict detected" in error_msg
         assert "Added columns: age, email" in error_msg
         assert "migrate_schema() function" in error_msg
+
+
+class TestZeekerProjectToDatasette:
+    """Tests for ZeekerProject.to_datasette_metadata() table-level field pass-through."""
+
+    def test_per_resource_license_fields_in_table_metadata(self):
+        """Per-resource license and license_url must appear in the generated table metadata."""
+        from zeeker.core.types import ZeekerProject
+
+        project = ZeekerProject(
+            name="test",
+            database="test.db",
+            resources={
+                "decisions": {
+                    "description": "Enforcement decisions",
+                    "license": "All rights reserved",
+                    "license_url": "https://www.example.gov.sg/terms-of-use/",
+                    "source": "Example Agency",
+                    "source_url": "https://www.example.gov.sg/decisions/",
+                }
+            },
+        )
+
+        metadata = project.to_datasette_metadata()
+        table = metadata["databases"]["test"]["tables"]["decisions"]
+
+        assert table["license"] == "All rights reserved"
+        assert table["license_url"] == "https://www.example.gov.sg/terms-of-use/"
+        assert table["source"] == "Example Agency"
+        assert table["source_url"] == "https://www.example.gov.sg/decisions/"
+
+    def test_per_resource_license_fields_optional(self):
+        """Resources without license fields should produce table metadata without them."""
+        from zeeker.core.types import ZeekerProject
+
+        project = ZeekerProject(
+            name="test",
+            database="test.db",
+            resources={"items": {"description": "Some items"}},
+        )
+
+        metadata = project.to_datasette_metadata()
+        table = metadata["databases"]["test"]["tables"]["items"]
+
+        assert "license" not in table
+        assert "license_url" not in table
+        assert "source" not in table
+        assert "source_url" not in table
         assert "--force-schema-reset" in error_msg
