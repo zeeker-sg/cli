@@ -8,8 +8,7 @@ from click.testing import CliRunner
 
 from zeeker.cli import cli
 
-SAMPLE_TOML = textwrap.dedent(
-    """\
+SAMPLE_TOML = textwrap.dedent("""\
     [project]
     name = "test_project"
     database = "test_project.db"
@@ -25,8 +24,7 @@ SAMPLE_TOML = textwrap.dedent(
     fragments = true
     fragments_on_skip = true
     fts_fields = ["content_text", "summary"]
-    """
-)
+    """)
 
 
 @pytest.fixture

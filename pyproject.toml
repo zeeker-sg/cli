@@ -11,7 +11,7 @@ members = [
 dev-dependencies = [
     "pytest>=8.4.0",
     "pytest-cov>=6.2.1",
-    "black>=25.1.0",
+    "black>=26.10.1",
     "ruff>=0.8.0",
 ]
 

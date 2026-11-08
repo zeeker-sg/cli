@@ -44,17 +44,12 @@ def _make_project(tmp_path: Path, toml_body: str) -> ZeekerProjectManager:
     manager = ZeekerProjectManager(tmp_path)
     init_result = manager.init_project("test_project")
     assert init_result.is_valid
-    (tmp_path / "zeeker.toml").write_text(
-        textwrap.dedent(
-            """\
+    (tmp_path / "zeeker.toml").write_text(textwrap.dedent("""\
             [project]
             name = "test_project"
             database = "test_project.db"
 
-            """
-        )
-        + textwrap.dedent(toml_body)
-    )
+            """) + textwrap.dedent(toml_body))
     return manager
 
 
@@ -104,14 +99,12 @@ class TestSkipInBuild:
 
     def test_async_fetch_raising_skip_maps_to_skipped_outcome(self, tmp_path):
         manager = _make_project(tmp_path, "[resource.async_skip]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "async_skip.py").write_text(
-            """
+        (tmp_path / "resources" / "async_skip.py").write_text("""
 from zeeker import Skip
 
 async def fetch_data(existing_table):
     raise Skip("feature flag off", kind="disabled")
-"""
-        )
+""")
 
         result = manager.build_database()
         assert result.is_valid, result.errors
@@ -142,8 +135,7 @@ async def fetch_data(existing_table):
         fetch_counter = tmp_path / "count.txt"
         flag = tmp_path / "skip_now.flag"
         manager = _make_project(tmp_path, "[resource.docs]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "docs.py").write_text(
-            f"""
+        (tmp_path / "resources" / "docs.py").write_text(f"""
 from pathlib import Path
 from zeeker import Skip
 
@@ -156,8 +148,7 @@ def fetch_data(existing_table):
     if Path(FLAG).exists():
         raise Skip("source unreachable", kind="blocked")
     return [{{"id": 1, "title": "seed"}}]
-"""
-        )
+""")
 
         first = manager.build_database()
         assert first.is_valid, first.errors
@@ -186,8 +177,7 @@ def fetch_data(existing_table):
             fragments_on_skip = true
             """,
         )
-        (tmp_path / "resources" / "enrich.py").write_text(
-            f"""
+        (tmp_path / "resources" / "enrich.py").write_text(f"""
 from pathlib import Path
 from zeeker import Skip
 
@@ -199,8 +189,7 @@ def fetch_data(existing_table):
 def fetch_fragments_data(existing_fragments_table, main_data_context=None):
     Path(CONTEXT_FILE).write_text(repr(main_data_context))
     return [{{"id": 1, "parent_id": 1, "text": "enriched fragment"}}]
-"""
-        )
+""")
 
         result = manager.build_database()
         assert result.is_valid, result.errors
@@ -278,18 +267,14 @@ class TestFailOnBlockedFlag:
     def _make_cli_project(self, resource_code: str) -> None:
         manager = ZeekerProjectManager(Path.cwd())
         assert manager.init_project("cli_project").is_valid
-        Path("zeeker.toml").write_text(
-            textwrap.dedent(
-                """\
+        Path("zeeker.toml").write_text(textwrap.dedent("""\
                 [project]
                 name = "cli_project"
                 database = "cli_project.db"
 
                 [resource.res]
                 description = "x"
-                """
-            )
-        )
+                """))
         (Path("resources") / "res.py").write_text(resource_code)
 
     def test_blocked_skip_exits_1_with_flag(self, runner):
@@ -334,8 +319,7 @@ class TestWarningsInPayload:
         must land on the (failed) outcome and in the JSON payload."""
         flag = tmp_path / "explode.flag"
         manager = _make_project(tmp_path, "[resource.docs]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "docs.py").write_text(
-            f"""
+        (tmp_path / "resources" / "docs.py").write_text(f"""
 from pathlib import Path
 
 FLAG = {str(flag)!r}
@@ -344,8 +328,7 @@ def fetch_data(existing_table):
     if Path(FLAG).exists():
         raise RuntimeError("connection refused")
     return [{{"id": 1, "title": "seed"}}]
-"""
-        )
+""")
 
         first = manager.build_database()
         assert first.is_valid, first.errors
@@ -383,14 +366,12 @@ def fetch_data(existing_table):
 class TestZeekerReportCounters:
     def test_counters_on_skipped_resource(self, tmp_path):
         manager = _make_project(tmp_path, "[resource.enricher]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "enricher.py").write_text(
-            """
+        (tmp_path / "resources" / "enricher.py").write_text("""
 def fetch_data(existing_table):
     global __zeeker_report__
     __zeeker_report__ = {"updated": 50, "enriched": 25, "notes": "phase2 drained 25"}
     return []
-"""
-        )
+""")
 
         result = manager.build_database()
         assert result.is_valid, result.errors
@@ -406,16 +387,14 @@ def fetch_data(existing_table):
 
     def test_counters_on_skip_raised_resource(self, tmp_path):
         manager = _make_project(tmp_path, "[resource.enricher]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "enricher.py").write_text(
-            """
+        (tmp_path / "resources" / "enricher.py").write_text("""
 from zeeker import Skip
 
 def fetch_data(existing_table):
     global __zeeker_report__
     __zeeker_report__ = {"updated": 7}
     raise Skip("up to date")
-"""
-        )
+""")
 
         result = manager.build_database()
         assert result.is_valid, result.errors
@@ -425,8 +404,7 @@ def fetch_data(existing_table):
 
     def test_malformed_report_never_fails_build(self, tmp_path):
         manager = _make_project(tmp_path, "[resource.messy]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "messy.py").write_text(
-            """
+        (tmp_path / "resources" / "messy.py").write_text("""
 def fetch_data(existing_table):
     global __zeeker_report__
     __zeeker_report__ = {
@@ -437,8 +415,7 @@ def fetch_data(existing_table):
         "notes": ["not", "str"], # non-str notes → ignored
     }
     return [{"id": 1}]
-"""
-        )
+""")
 
         result = manager.build_database()
         assert result.is_valid, result.errors
@@ -449,14 +426,12 @@ def fetch_data(existing_table):
 
     def test_non_dict_report_ignored(self, tmp_path):
         manager = _make_project(tmp_path, "[resource.weird]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "weird.py").write_text(
-            """
+        (tmp_path / "resources" / "weird.py").write_text("""
 def fetch_data(existing_table):
     global __zeeker_report__
     __zeeker_report__ = "not a dict"
     return [{"id": 1}]
-"""
-        )
+""")
         result = manager.build_database()
         assert result.is_valid, result.errors
         assert result.report.resources[0].extra_counts == {}
@@ -466,8 +441,7 @@ def fetch_data(existing_table):
         into a later build that doesn't set it."""
         set_flag = tmp_path / "set_report.flag"
         manager = _make_project(tmp_path, "[resource.oneshot]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "oneshot.py").write_text(
-            f"""
+        (tmp_path / "resources" / "oneshot.py").write_text(f"""
 from pathlib import Path
 
 FLAG = {str(set_flag)!r}
@@ -477,8 +451,7 @@ def fetch_data(existing_table):
         global __zeeker_report__
         __zeeker_report__ = {{"updated": 9}}
     return []
-"""
-        )
+""")
 
         set_flag.write_text("on")
         first = manager.build_database()
@@ -691,14 +664,12 @@ class TestRichMarkupSafety:
         not convert the build into a fatal error via the TTY progress
         callback (builder catches callback exceptions as fatal)."""
         manager = _make_project(tmp_path, "[resource.spiky]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "spiky.py").write_text(
-            """
+        (tmp_path / "resources" / "spiky.py").write_text("""
 from zeeker import Skip
 
 def fetch_data(existing_table):
     raise Skip("proxy down [/socks5]", kind="blocked")
-"""
-        )
+""")
         buf = io.StringIO()
         console = _tty_console(buf)
 
@@ -731,8 +702,7 @@ class TestSkipDoesNotAdvanceFreshnessMarker:
     def _project_with_flagged_resource(self, tmp_path: Path, kind: str):
         flag = tmp_path / "skip.flag"
         manager = _make_project(tmp_path, "[resource.docs]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "docs.py").write_text(
-            f"""
+        (tmp_path / "resources" / "docs.py").write_text(f"""
 from pathlib import Path
 from zeeker import Skip
 
@@ -742,8 +712,7 @@ def fetch_data(existing_table):
     if Path(FLAG).exists():
         raise Skip("source unreachable", kind={kind!r})
     return [{{"id": 1}}]
-"""
-        )
+""")
         return manager, flag
 
     @pytest.mark.parametrize("kind", ["blocked", "disabled"])
@@ -794,8 +763,7 @@ class TestSkipInFragmentsPhase:
             fragments = true
             """,
         )
-        (tmp_path / "resources" / "enrich.py").write_text(
-            """
+        (tmp_path / "resources" / "enrich.py").write_text("""
 from zeeker import Skip
 
 def fetch_data(existing_table):
@@ -803,8 +771,7 @@ def fetch_data(existing_table):
 
 def fetch_fragments_data(existing_fragments_table, main_data_context=None):
     raise Skip("enrichment proxy down", kind="blocked")
-"""
-        )
+""")
 
         result = manager.build_database()
         assert result.is_valid, result.errors
@@ -827,8 +794,7 @@ class TestZeekerReportLateCounters:
             fragments_on_skip = true
             """,
         )
-        (tmp_path / "resources" / "backfill.py").write_text(
-            """
+        (tmp_path / "resources" / "backfill.py").write_text("""
 def fetch_data(existing_table):
     global __zeeker_report__
     __zeeker_report__ = {"discovered": 2}
@@ -838,8 +804,7 @@ def fetch_fragments_data(existing_fragments_table, main_data_context=None):
     global __zeeker_report__
     __zeeker_report__ = {"fragments_backfilled": 4, "notes": "backfill ran"}
     return [{"id": 1, "parent_id": 1, "text": "chunk"}]
-"""
-        )
+""")
 
         result = manager.build_database()
         assert result.is_valid, result.errors
@@ -850,8 +815,7 @@ def fetch_fragments_data(existing_fragments_table, main_data_context=None):
 
     def test_counters_set_in_transform_data_are_captured(self, tmp_path):
         manager = _make_project(tmp_path, "[resource.shaper]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "shaper.py").write_text(
-            """
+        (tmp_path / "resources" / "shaper.py").write_text("""
 def fetch_data(existing_table):
     return [{"id": 1}]
 
@@ -859,8 +823,7 @@ def transform_data(data):
     global __zeeker_report__
     __zeeker_report__ = {"normalized": 1}
     return data
-"""
-        )
+""")
 
         result = manager.build_database()
         assert result.is_valid, result.errors
@@ -870,14 +833,12 @@ def transform_data(data):
         """Enrichment work committed before fetch_data crashes must still be
         visible on the failed outcome (and thus the JSON payload)."""
         manager = _make_project(tmp_path, "[resource.threephase]\ndescription = 'x'\n")
-        (tmp_path / "resources" / "threephase.py").write_text(
-            """
+        (tmp_path / "resources" / "threephase.py").write_text("""
 def fetch_data(existing_table):
     global __zeeker_report__
     __zeeker_report__ = {"enriched": 25}
     raise ConnectionError("discovery endpoint down")
-"""
-        )
+""")
 
         result = manager.build_database()
         assert not result.is_valid

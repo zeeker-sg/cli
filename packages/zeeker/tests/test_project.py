@@ -116,16 +116,14 @@ class TestZeekerProjectManager:
     def test_load_project_success(self, manager):
         """Test loading an existing project."""
         # Create a test project file
-        toml_content = textwrap.dedent(
-            """[project]
+        toml_content = textwrap.dedent("""[project]
 name = "test_project"
 database = "test_project.db"
 
 [resource.users]
 description = "User data"
 facets = ["role", "department"]
-"""
-        )
+""")
         manager.toml_path.write_text(toml_content)
 
         project = manager.load_project()

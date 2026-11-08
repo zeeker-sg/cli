@@ -9,7 +9,6 @@ import pytest
 
 from zeeker.core.project import ZeekerProjectManager
 
-
 # Skip these tests in workspace mode (before publishing to PyPI)
 # These tests require zeeker to be available on PyPI
 pytestmark = pytest.mark.skipif(
