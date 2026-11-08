@@ -9,7 +9,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["black>=25.1.0", "ruff>=0.17.3"]
+dev = ["black>=26.10.1", "ruff>=0.17.3"]
 
 [tool.uv.sources]
 zeeker = { workspace = true }
