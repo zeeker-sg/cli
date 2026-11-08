@@ -213,12 +213,10 @@ class TestResourceProcessor:
         """Test successful resource module loading."""
         # Create a valid resource file in the processor's resources path
         resource_file = processor.resources_path / "test_resource.py"
-        resource_file.write_text(
-            """
+        resource_file.write_text("""
 def fetch_data(existing_table):
     return [{"id": 1, "name": "test"}]
-"""
-        )
+""")
 
         result = processor._load_resource_module("test_resource")
         assert result.is_valid

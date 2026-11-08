@@ -26,8 +26,7 @@ def sample_project_dir(temp_dir):
     project_dir.mkdir()
 
     # Create zeeker.toml
-    toml_content = textwrap.dedent(
-        """[project]
+    toml_content = textwrap.dedent("""[project]
 name = "test_project"
 database = "test_project.db"
 
@@ -39,8 +38,7 @@ size = 50
 [resource.posts]
 description = "Blog posts"
 sort = "created_date desc"
-"""
-    )
+""")
     (project_dir / "zeeker.toml").write_text(toml_content)
 
     # Create resources directory

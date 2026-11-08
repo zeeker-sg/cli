@@ -141,12 +141,10 @@ from typing import Optional, List, Dict, Any"""
         # Assemble parts
         parts = [docstring, imports]
         if not fragments:
-            parts.append(
-                """
+            parts.append("""
 # Optional: Import common utilities from zeeker-common package
 # Install with: uv add zeeker-common
-# from zeeker_common import get_hash_id, get_jina_reader_content, async_retry"""
-            )
+# from zeeker_common import get_hash_id, get_jina_reader_content, async_retry""")
         parts.append(fetch_data)
         if fragments_funcs:
             parts.append(fragments_funcs)

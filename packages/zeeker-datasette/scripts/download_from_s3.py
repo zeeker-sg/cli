@@ -3,6 +3,7 @@
 Download SQLite databases and assets from S3 with three-pass merge system.
 Enhanced version of the original script with asset management capabilities.
 """
+
 import json
 import logging
 import os

@@ -72,15 +72,13 @@ class TestAsyncTemplateGeneration:
         manager = ZeekerProjectManager(tmp_path)
 
         # Create basic project structure
-        (tmp_path / "zeeker.toml").write_text(
-            """
+        (tmp_path / "zeeker.toml").write_text("""
 [project]
 name = "test_project"
 database = "test.db"
 
 [resources]
-"""
-        )
+""")
         (tmp_path / "resources").mkdir()
 
         # Add async resource
@@ -103,15 +101,13 @@ database = "test.db"
         manager = ZeekerProjectManager(tmp_path)
 
         # Create basic project structure
-        (tmp_path / "zeeker.toml").write_text(
-            """
+        (tmp_path / "zeeker.toml").write_text("""
 [project]
 name = "test_project"
 database = "test.db"
 
 [resources]
-"""
-        )
+""")
         (tmp_path / "resources").mkdir()
 
         # Add async fragments resource
@@ -139,16 +135,14 @@ class TestAsyncDatabaseBuilding:
     def test_build_with_async_resource(self, tmp_path):
         """Test building database with async resource."""
         # Create project structure
-        (tmp_path / "zeeker.toml").write_text(
-            """
+        (tmp_path / "zeeker.toml").write_text("""
 [project]
 name = "test_project"
 database = "test.db"
 
 [resources.async_users]
 description = "Async users resource"
-"""
-        )
+""")
 
         resources_dir = tmp_path / "resources"
         resources_dir.mkdir()
@@ -202,8 +196,7 @@ async def fetch_data(existing_table: Optional[Table]) -> List[Dict[str, Any]]:
     def test_build_with_async_fragments_resource(self, tmp_path):
         """Test building database with async fragments resource."""
         # Create project structure
-        (tmp_path / "zeeker.toml").write_text(
-            """
+        (tmp_path / "zeeker.toml").write_text("""
 [project]
 name = "test_project"
 database = "test.db"
@@ -211,8 +204,7 @@ database = "test.db"
 [resources.async_docs]
 description = "Async documents resource"
 fragments = true
-"""
-        )
+""")
 
         resources_dir = tmp_path / "resources"
         resources_dir.mkdir()

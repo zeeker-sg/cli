@@ -2,6 +2,7 @@
 """
 Simple string management plugin using YAML files
 """
+
 from datetime import datetime
 from pathlib import Path
 

@@ -124,12 +124,10 @@ def test_fragments_error_handling(temp_project_dir):
 
     # Create a manual resource file without fetch_fragments_data function
     resource_file = temp_project_dir / "resources" / "bad_docs.py"
-    resource_file.write_text(
-        """
+    resource_file.write_text("""
 def fetch_data(existing_table):
     return [{"id": 1, "title": "Test"}]
-"""
-    )
+""")
 
     # Update TOML to mark it as fragments-enabled
     toml_content = """[project]

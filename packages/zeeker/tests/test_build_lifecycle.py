@@ -38,17 +38,12 @@ def _make_project(tmp_path: Path, toml_body: str) -> ZeekerProjectManager:
     manager = ZeekerProjectManager(tmp_path)
     init_result = manager.init_project("test_project")
     assert init_result.is_valid
-    (tmp_path / "zeeker.toml").write_text(
-        textwrap.dedent(
-            """\
+    (tmp_path / "zeeker.toml").write_text(textwrap.dedent("""\
             [project]
             name = "test_project"
             database = "test_project.db"
 
-            """
-        )
-        + textwrap.dedent(toml_body)
-    )
+            """) + textwrap.dedent(toml_body))
     return manager
 
 
@@ -78,9 +73,7 @@ def test_fetch_data_called_once_per_fragments_build(tmp_path):
         """,
     )
 
-    resource_code = (
-        COUNTER_HELPERS
-        + f"""
+    resource_code = COUNTER_HELPERS + f"""
 FETCH_COUNTER = {str(fetch_counter)!r}
 
 def fetch_data(existing_table):
@@ -102,7 +95,6 @@ def fetch_fragments_data(existing_fragments_table, main_data_context=None):
         if part.strip()
     ]
 """
-    )
     (tmp_path / "resources" / "docs.py").write_text(resource_code)
 
     build_result = manager.build_database()
@@ -133,9 +125,7 @@ def test_fetch_data_called_once_per_incremental_build(tmp_path):
         """,
     )
 
-    resource_code = (
-        COUNTER_HELPERS
-        + f"""
+    resource_code = COUNTER_HELPERS + f"""
 FETCH_COUNTER = {str(fetch_counter)!r}
 
 def fetch_data(existing_table):
@@ -156,7 +146,6 @@ def fetch_fragments_data(existing_fragments_table, main_data_context=None):
         if part.strip()
     ]
 """
-    )
     (tmp_path / "resources" / "docs.py").write_text(resource_code)
 
     first = manager.build_database()
@@ -180,9 +169,7 @@ def test_resource_module_loaded_once_per_build(tmp_path):
         """,
     )
 
-    resource_code = (
-        COUNTER_HELPERS
-        + f"""
+    resource_code = COUNTER_HELPERS + f"""
 IMPORT_COUNTER = {str(import_counter)!r}
 _bump(IMPORT_COUNTER)  # module-level side effect: counts imports
 
@@ -194,7 +181,6 @@ def fetch_fragments_data(existing_fragments_table, main_data_context=None):
         return []
     return [{{"parent_id": doc["id"], "text": doc["content"]}} for doc in main_data_context]
 """
-    )
     (tmp_path / "resources" / "docs.py").write_text(resource_code)
 
     build_result = manager.build_database()
@@ -385,9 +371,7 @@ def test_parallel_build_preserves_module_state_for_fragments(tmp_path):
         """,
     )
 
-    docs_code = (
-        COUNTER_HELPERS
-        + f"""
+    docs_code = COUNTER_HELPERS + f"""
 IMPORT_COUNTER = {str(import_counter)!r}
 _bump(IMPORT_COUNTER)  # module-level side effect: counts imports
 
@@ -405,14 +389,11 @@ def fetch_fragments_data(existing_fragments_table, main_data_context=None):
     # instance that ran fetch_data is handed to the fragments phase.
     return [{{"parent_id": r["id"], "text": r["content"]}} for r in _PENDING]
 """
-    )
     (tmp_path / "resources" / "docs.py").write_text(docs_code)
-    (tmp_path / "resources" / "other.py").write_text(
-        """
+    (tmp_path / "resources" / "other.py").write_text("""
 def fetch_data(existing_table):
     return [{"id": 1, "value": "x"}]
-"""
-    )
+""")
 
     build_result = manager.build_database(max_parallel=2)
     assert build_result.is_valid, build_result.errors
@@ -491,12 +472,10 @@ def test_resources_dir_not_left_on_sys_path(tmp_path):
         description = "Plain resource"
         """,
     )
-    (tmp_path / "resources" / "plain.py").write_text(
-        """
+    (tmp_path / "resources" / "plain.py").write_text("""
 def fetch_data(existing_table):
     return [{"id": 1}]
-"""
-    )
+""")
 
     build_result = manager.build_database()
     assert build_result.is_valid, build_result.errors
@@ -519,20 +498,16 @@ def test_sibling_modules_do_not_leak_across_projects(tmp_path):
             description = "Uses a same-named sibling helper"
             """,
         )
-        (project_dir / "resources" / "leak_probe_helper_zq.py").write_text(
-            f"""
+        (project_dir / "resources" / "leak_probe_helper_zq.py").write_text(f"""
 VALUE = {label!r}
-"""
-        )
-        (project_dir / "resources" / "uses_helper.py").write_text(
-            """
+""")
+        (project_dir / "resources" / "uses_helper.py").write_text("""
 import leak_probe_helper_zq
 
 
 def fetch_data(existing_table):
     return [{"id": 1, "value": leak_probe_helper_zq.VALUE}]
-"""
-        )
+""")
 
         build_result = manager.build_database()
         assert build_result.is_valid, build_result.errors
@@ -561,9 +536,7 @@ def test_fetch_runs_once_despite_migrate_schema_row_change(tmp_path):
         """,
     )
 
-    resource_code = (
-        COUNTER_HELPERS
-        + f"""
+    resource_code = COUNTER_HELPERS + f"""
 FETCH_COUNTER = {str(fetch_counter)!r}
 PHASE_FILE = {str(phase_file)!r}
 
@@ -588,7 +561,6 @@ def migrate_schema(existing_table, migration):
     existing_table.add_column("extra", float)
     return True
 """
-    )
     (tmp_path / "resources" / "docs.py").write_text(resource_code)
 
     first = manager.build_database()
@@ -623,21 +595,17 @@ def test_sibling_import_in_resources(tmp_path):
         """,
     )
 
-    (tmp_path / "resources" / "sibling_helper_lib.py").write_text(
-        """
+    (tmp_path / "resources" / "sibling_helper_lib.py").write_text("""
 def make_rows():
     return [{"id": 1, "name": "from-helper"}]
-"""
-    )
-    (tmp_path / "resources" / "siblings.py").write_text(
-        """
+""")
+    (tmp_path / "resources" / "siblings.py").write_text("""
 import sibling_helper_lib
 
 
 def fetch_data(existing_table):
     return sibling_helper_lib.make_rows()
-"""
-    )
+""")
 
     build_result = manager.build_database()
     assert build_result.is_valid, build_result.errors

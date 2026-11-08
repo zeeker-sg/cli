@@ -9,6 +9,7 @@
 """
 Management commands for zeeker-datasette with enhanced asset management
 """
+
 import hashlib
 import json
 import logging
