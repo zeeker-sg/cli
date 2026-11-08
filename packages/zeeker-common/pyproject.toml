@@ -14,8 +14,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-openai = ["openai>=1.0.0"]
-all = ["openai>=1.0.0"]
+openai = ["openai>=3.46.0"]
+all = ["openai>=3.46.0"]
 
 [project.urls]
 Homepage = "https://github.com/zeeker-sg/cli"
