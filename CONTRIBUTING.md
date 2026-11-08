@@ -319,50 +319,58 @@ uv run zeeker build
 
 ## Publishing (Maintainers)
 
-### Version Bumping
+Releases are built and uploaded by `.github/workflows/publish-zeeker.yml`
+using PyPI Trusted Publishing (OIDC). There is no PyPI token to manage and
+nothing is published from a laptop.
 
-Update version in respective `pyproject.toml`:
+Before anything is uploaded the workflow:
 
-```toml
-# packages/zeeker/pyproject.toml
-[project]
-version = "0.6.1"
+1. runs the full test suite (`test.yml`, reused via `workflow_call`);
+2. checks that the version in the package's `pyproject.toml` equals the
+   version named by the release tag (or the manual `version` input);
+3. for releases, checks that the tagged commit is on `main`;
+4. checks that this version is not already on PyPI (releases are immutable).
 
-# packages/zeeker-common/pyproject.toml
-[project]
-version = "0.1.1"
-```
+The `release` environment only accepts deployments from `main` and from
+`v*` tags, and requires a maintainer approval before the publish job runs.
 
-### Publishing to PyPI
+### Releasing zeeker
 
-Publishing is automated via GitHub Actions on release.
+Tags are `vX.Y.Z` and carry the zeeker version.
 
-**Manual publishing (if needed):**
-
-```bash
-# Build zeeker
-cd packages/zeeker
-uv build
-uv publish --token $PYPI_TOKEN
-
-# Build zeeker-common
-cd packages/zeeker-common
-uv build
-uv publish --token $PYPI_TOKEN_COMMON
-```
-
-### Creating a Release
-
-1. Update version numbers
-2. Update CHANGELOG (if you maintain one)
-3. Commit version bumps
-4. Create git tag:
+1. Bump `version` in `packages/zeeker/pyproject.toml` on a branch, run
+   `uv lock`, and merge the PR to `main` (CI must pass).
+2. Tag the merge commit on `main` and push the tag:
    ```bash
-   git tag zeeker-v0.6.1
-   git tag zeeker-common-v0.1.1
-   git push --tags
+   git checkout main && git pull
+   git tag v0.9.1
+   git push origin v0.9.1
    ```
-5. Create GitHub Release (triggers auto-publish)
+3. Create a GitHub Release for that tag (Releases → Draft a new release →
+   choose the tag → "Generate release notes" → Publish). Publishing the
+   release triggers the workflow.
+4. Approve the `release` environment deployment when GitHub asks, then
+   confirm the new version appears at https://pypi.org/project/zeeker/.
+
+zeeker is pre-1.0, so a minor bump (0.8 → 0.9) may be breaking. Call out
+anything consumers must change in the release notes: every data project
+in the org pins zeeker in its `uv.lock` and only picks the release up when
+that lock is bumped, so the release notes are what they read first.
+
+### Releasing zeeker-common
+
+zeeker-common has no release tag. Bump `version` in
+`packages/zeeker-common/pyproject.toml`, merge to `main`, then run
+**Actions → Publish zeeker to PyPI → Run workflow** from `main` with
+`package = zeeker-common` and `version` set to the new version. The
+workflow refuses to run if the input and `pyproject.toml` disagree.
+
+### If a publish fails
+
+Fix the cause on `main`, then re-run the workflow manually with the same
+`package` and `version`. Do not retag; the version check will still pass
+because nothing reached PyPI. If a broken build *did* reach PyPI, yank it
+on PyPI and release a new patch version.
 
 ## Questions?
 
