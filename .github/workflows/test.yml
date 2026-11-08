@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Reused by publish-zeeker.yml so nothing reaches PyPI untested.
+  workflow_call:
 
 permissions:
   contents: read

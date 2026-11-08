@@ -1,5 +1,10 @@
 name: Publish zeeker to PyPI
 
+# Release path (zeeker only): publish a GitHub release whose tag is vX.Y.Z.
+# Manual path (zeeker or zeeker-common): run from main with the version you
+# expect to ship. Either way the package is built only after the test suite
+# passes and the version/ref checks below succeed, and the `release`
+# environment restricts which refs may deploy at all.
 on:
   release:
     types: [published]
@@ -13,13 +18,86 @@ on:
         options:
           - zeeker
           - zeeker-common
+      version:
+        description: 'Version you expect to publish (must equal the version in that package''s pyproject.toml)'
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  publish:
+  test:
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
+  verify:
+    name: Verify version and ref
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      package: ${{ steps.check.outputs.package }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        # Full history so the tag can be checked against main.
+        fetch-depth: 0
+
+    - name: Check version matches the ref and is not already on PyPI
+      id: check
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        REF_NAME: ${{ github.ref_name }}
+        INPUT_PACKAGE: ${{ inputs.package }}
+        INPUT_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        if [ "$EVENT_NAME" = "release" ]; then
+          # Releases always publish zeeker; the tag carries the version.
+          package=zeeker
+          case "$REF_NAME" in
+            v[0-9]*) expected="${REF_NAME#v}" ;;
+            *) echo "::error::Release tag '$REF_NAME' must look like vX.Y.Z"; exit 1 ;;
+          esac
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag '$REF_NAME' points at $GITHUB_SHA, which is not on main. Release from main only."
+            exit 1
+          fi
+        else
+          package="$INPUT_PACKAGE"
+          expected="$INPUT_VERSION"
+        fi
+
+        actual=$(python3 - "$package" <<'PY'
+        import sys, tomllib
+        with open(f"packages/{sys.argv[1]}/pyproject.toml", "rb") as f:
+            print(tomllib.load(f)["project"]["version"])
+        PY
+        )
+
+        if [ "$actual" != "$expected" ]; then
+          echo "::error::packages/$package/pyproject.toml says $actual but the ref/input says $expected. Bump the version (or fix the tag) before publishing."
+          exit 1
+        fi
+
+        status=$(curl -s -o /dev/null -w '%{http_code}' "https://pypi.org/pypi/$package/$expected/json")
+        if [ "$status" = "200" ]; then
+          echo "::error::$package $expected is already on PyPI. Releases are immutable; bump the version."
+          exit 1
+        fi
+
+        echo "Publishing $package $expected"
+        echo "package=$package" >> "$GITHUB_OUTPUT"
+        echo "version=$expected" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [test, verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: release
     permissions:
       contents: read
@@ -28,19 +106,15 @@ jobs:
       # fails with "Trusted publishing failed ... Missing credentials".
       id-token: write
     steps:
-    - uses: actions/checkout@v7
-
-    - name: Set up Python
-      uses: actions/setup-python@v7
-      with:
-        python-version: "3.12"
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v7
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      with:
+        version: "0.11.14"
 
-    - name: Build package
-      # Release events carry no workflow_dispatch input — default to zeeker.
-      run: uv build --package ${{ inputs.package || 'zeeker' }}
+    - name: Build ${{ needs.verify.outputs.package }} ${{ needs.verify.outputs.version }}
+      run: uv build --package "${{ needs.verify.outputs.package }}"
 
     - name: Publish to PyPI
       run: uv publish dist/*
