@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "boto3>=1.28.0",
+    "boto3>=1.43.124",
     "click>=8.1.3",
     "datasette-matomo>=0.1.2",
     "datasette-search-all>=1.1.4",
